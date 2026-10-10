@@ -1,0 +1,2 @@
+# No colors: structure comes from bold and reverse video. NO_COLOR selects it.
+name = "Mono"

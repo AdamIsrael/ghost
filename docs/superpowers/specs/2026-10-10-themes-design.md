@@ -59,7 +59,7 @@ info = "#7dcfff"
 `dark` and `light` gain role colors (ANSI) so they're no longer near-monochrome, as in mockup B.
 
 ## Readability rule
-For every built-in with a `background`: `foreground`, `muted`, and each status role must have a WCAG contrast ratio ≥ 4.5 against `background`; `on_accent` ≥ 4.5 against `accent`; `foreground` ≥ 4.5 against `selection`. Enforced by a test. User themes aren't checked (their choice), but `ghost --check` warns when the selected user theme fails it.
+For every theme with a `background`: `foreground` and `muted` must have a WCAG contrast ratio ≥ 4.5 against it; `accent`, `heading` and the status roles ≥ 3.0 (WCAG's threshold for UI components — they color icons and short labels); `on_accent` ≥ 4.5 against `accent`; `foreground` ≥ 4.5 against `selection`. Built-ins are tested; where a published palette color fails, the built-in uses the nearest shade of the same hue that passes and says so in its header. User themes aren't enforced, but `ghost --check` warns when the selected user theme fails.
 
 ## TUI behavior
 - `t` cycles all themes: built-ins in the order above, then user themes by id. The flash names the config line to keep it.
