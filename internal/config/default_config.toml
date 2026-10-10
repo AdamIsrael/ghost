@@ -1,4 +1,4 @@
-# Ghost configuration. Docs: docs/superpowers/specs/2026-10-09-ghost-design.md
+# Ghost configuration. Docs: https://github.com/AdamIsrael/ghost#configuration
 
 poll_interval = "5m"
 max_concurrent_reviews = 2

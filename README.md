@@ -1,0 +1,218 @@
+# Ghost
+
+Ghost is a terminal UI that watches GitHub pull requests and reviews them with an AI agent. It polls the PR searches you define, shows each PR's status, runs reviews with [Claude Code](https://docs.claude.com/en/docs/claude-code), and posts the review comments (and, if you allow it, approvals) back to GitHub, all within a daily budget you set.
+
+```
+ Views:  Team (3)   Mine (12)   ←/→ switch · n new · e edit · d delete · …
+ ● Ready             o/r#42 Add retries    │ o/r#42  Add retries
+ ◐ Waiting on CI     o/r#40 Bump deps      │ by @octocat  +120 −30  4 files
+ ✗ CI failing        o/r#38 Fix parser     │ Status: ● Ready   CI: ✓ passing
+ ✓ Approved          o/r#37 Update docs    │ ── Audit trail ──
+                                           │ 10:02 reviewed — approve, 1 comments, $0.40
+ Spend today $3.12 / $10.00 · Reviews 1 running · 2 queued · Last poll 10:04
+```
+
+## Requirements
+
+- **Go 1.27.1** or newer, to build Ghost.
+- **[GitHub CLI](https://cli.github.com) (`gh`)**, logged in (`gh auth login`). Ghost uses your `gh` login for GitHub, so it can see the same repos you can.
+- **[Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude`)**, logged in. Reviews run through it and are billed to your Claude account.
+- **git**.
+- macOS or Linux.
+
+## Install
+
+```bash
+go install github.com/AdamIsrael/ghost/cmd/ghost@latest
+```
+
+Or from a clone: `go build -o bin/ghost ./cmd/ghost`.
+
+## Quick start
+
+1. Create the starter config:
+   ```bash
+   ghost init
+   ```
+   This writes `~/.config/ghost/config.toml`, `views.toml` and `prompts/default.md`. It never overwrites existing files.
+2. Check your setup:
+   ```bash
+   ghost --check
+   ```
+   It confirms `git`, `gh` (including login) and `claude` are available and that your config is valid.
+3. Start the TUI:
+   ```bash
+   ghost
+   ```
+   The starter view lists PRs where your review is requested. Nothing is reviewed automatically until you turn on `auto_review` for a view, so nothing is spent yet.
+4. Try a single review without posting anything:
+   ```bash
+   ghost review https://github.com/owner/repo/pull/123 --dry-run
+   ```
+
+## How it works
+
+1. **Views** are GitHub searches, such as `is:open is:pr review-requested:@me`. Ghost runs each one every `poll_interval`.
+2. For views with `auto_review = true`, each new PR commit is queued for **one** review. Drafts are skipped, and a review that fails is not retried automatically (press `r` to retry).
+3. A review runs Claude Code against a temporary checkout of the PR, using your agent's prompt. Ghost then checks the result for anything that looks like a secret.
+4. With `post_mode = "confirm"` (the default), the finished review waits in the detail pane until you press **`P`** to post it. With `"auto"`, it posts right away.
+5. If `[auto_approve]` is enabled and the PR meets its rules, Ghost offers an approval (press **`a`**), or approves on its own when `require_confirm = false`.
+
+Every step is recorded in the PR's audit trail, shown in the detail pane.
+
+## Safety and cost
+
+- **The agent can only read.** Reviews run with no shell and no write tools, are confined to the PR checkout, and ignore the repo's own Claude settings, hooks, plugins and `CLAUDE.md`. Ghost computes the diff itself and hands it to the agent.
+- **Ghost posts, the agent doesn't.** Every review is scanned for secret-like strings (GitHub, AWS, Anthropic, Slack and Google keys, private keys) before posting. A match blocks the review permanently.
+- **Spend is capped.** A review starts only if `max_daily_cost_usd` leaves room for it at `max_cost_per_review_usd`. A review that is cut short (you quit, or it crashes) is counted at the per-review cap.
+- **Nothing posts twice.** Each posted review and approval carries a hidden marker. If GitHub's response is lost, Ghost checks for the marker before trying again.
+- **Approvals are careful.** Ghost approves only the PR's latest review, only the exact commit it reviewed, and only after rechecking the rules against GitHub right before approving. It never approves a commit twice. GitHub doesn't let you approve your own PRs, so Ghost can't either.
+- Only one Ghost can run against a given database at a time.
+
+## Keys
+
+| Key | Action |
+|---|---|
+| `←` `→` / `h` `l` / `tab` | Switch view |
+| `↑` `↓` / `j` `k` | Move through PRs |
+| `o` / `enter` | Open the PR in your browser |
+| `r` | Review the selected PR again |
+| `P` | Post the selected PR's pending review |
+| `a` | Approve the selected PR (when an approval is pending) |
+| `p` | Pause or resume starting new reviews |
+| `R` | Poll GitHub now |
+| `n` / `e` / `d` | New, edit or delete a view (`d` asks for `y` to confirm) |
+| `t` | Cycle color themes |
+| `q` / `ctrl+c` | Quit |
+
+In the view form: `tab` moves between fields, `space` toggles auto-review, `←` `→` pick the agent, `enter` saves and `esc` cancels.
+
+## Configuration
+
+Ghost reads `~/.config/ghost/config.toml` (or `$XDG_CONFIG_HOME/ghost/config.toml`). Ghost never writes this file, so your comments stay put. Unknown keys are an error, so typos don't go unnoticed.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `poll_interval` | `"5m"` | How often each view is polled (minimum `30s`) |
+| `max_concurrent_reviews` | `2` | Reviews running at once |
+| `max_daily_cost_usd` | `10.0` | Spend cap per local day |
+| `max_cost_per_review_usd` | `1.5` | Cap for a single review (passed to Claude Code) |
+| `post_mode` | `"confirm"` | `"confirm"` (press `P`) or `"auto"` |
+| `theme` | `"auto"` | Color theme; see [Themes](#themes) |
+| `default_agent` | `"claude"` | Agent used when a view doesn't name one |
+
+### Agents and prompts
+
+Each `[agents.<name>]` table defines a reviewer with its own model and prompt:
+
+```toml
+[agents.security]
+kind = "claude"
+model = "claude-opus-5-5"
+prompt = """
+Review {{.Repo}}#{{.Number}} ("{{.Title}}") for security problems only.
+"""
+```
+
+Use `prompt` inline or `prompt_file` (a path relative to the config file, or under `~/`). Prompts are Go templates with these variables: `{{.Repo}}`, `{{.Number}}`, `{{.Title}}`, `{{.Author}}`, `{{.Body}}`, `{{.BaseRef}}`, `{{.HeadRef}}`, `{{.HeadSHA}}`, `{{.URL}}` and `{{.ChangedFiles}}` (`{{join .ChangedFiles ", "}}` joins the file names). Ghost appends a fixed section telling the agent where the diff is and how to format its answer, so a custom prompt can't break parsing.
+
+To see exactly what an agent will be sent, for free:
+
+```bash
+ghost review owner/repo#123 --agent security --show-prompt
+```
+
+### Views
+
+Views live in `views.toml` next to `config.toml`. You can edit them in the TUI (`n`, `e`, `d`) or by hand while Ghost is stopped; saving from the TUI rewrites the file, so its comments aren't kept.
+
+```toml
+[[view]]
+name = "Team"
+query = "is:open is:pr review-requested:@me"
+auto_review = true        # reviews start, and cost money, as soon as this is saved
+agent = "security"        # optional; defaults to default_agent
+```
+
+`[[view]]` tables in `config.toml` also work, but they're read-only in the TUI. View names must be unique across both files.
+
+### Auto-approve
+
+```toml
+[auto_approve]
+enabled = true
+require_confirm = true      # false = approve without asking
+require_ci_green = true
+no_checks_is_green = false  # PRs with no CI checks aren't "green" unless true
+no_blocking_comments = true
+no_changes_requested = true
+max_changed_lines = 400     # 0 = no limit
+```
+
+A PR qualifies only if the agent's verdict is "approve" and every enabled rule passes. If only CI, draft status or a human's requested changes are in the way, the approval waits and is rechecked on every poll.
+
+## Themes
+
+Set `theme` in `config.toml`, or press `t` to try them live. The status bar tells you which line to add to keep one.
+
+Built-ins: `dark`, `light`, `high-contrast`, `mono`, `tokyo-night`, `tokyo-night-storm`, `tokyo-night-day`, `catppuccin-mocha`, `catppuccin-latte`, `dracula`, `nord`, `gruvbox-dark`, `solarized-dark` and `solarized-light`.
+
+- `auto` picks `dark` or `light` from your terminal's background. Until the terminal answers, it uses neutral colors that read on either.
+- `NO_COLOR=1` turns colors off.
+- Every built-in meets a contrast check: text and hints at 4.5:1, status colors at 3:1.
+
+To add your own, create `~/.config/ghost/themes/<name>.toml`. Copying a built-in from [`internal/theme/builtin/`](internal/theme/builtin) is the easiest start. Colors are `"#rrggbb"` or an ANSI index `"0"`–`"255"`, and any role you leave out uses your terminal's color.
+
+```toml
+name = "My theme"
+background = "#1a1b26"   # optional: Ghost paints the whole screen
+foreground = "#c0caf5"
+muted = "#7b81a7"        # hints, URLs, timestamps, drafts
+border = "#3b4261"
+accent = "#7aa2f7"       # active view tab
+on_accent = "#1a1b26"
+heading = "#7aa2f7"
+selection = "#292e42"    # selected row
+success = "#9ece6a"      # Ready, CI passing, additions
+warning = "#e0af68"      # Waiting on CI, spend
+error = "#f7768e"        # CI failing, deletions, errors
+attention = "#ff9e64"    # Changes requested
+special = "#bb9af7"      # Approved, pending review
+info = "#7dcfff"         # authors
+```
+
+A file named after a built-in replaces it. `ghost --check` warns if your selected theme is hard to read.
+
+## Command line
+
+```
+ghost [--config PATH] [--db PATH]                  start the TUI
+ghost [--config PATH] init                         write starter config, views and prompt
+ghost [--config PATH] --check                      check tools, login and config
+ghost [--config PATH] review <pr> --dry-run        review one PR and print it; posts nothing
+ghost [--config PATH] review <pr> --show-prompt    print the prompt; runs nothing
+```
+
+`<pr>` is a PR URL or `owner/repo#123`. Add `--agent NAME` to `review` to use a specific agent.
+
+## Files
+
+| Path | Contents |
+|---|---|
+| `~/.config/ghost/config.toml` | Settings (yours; Ghost never writes it) |
+| `~/.config/ghost/views.toml` | Views managed from the TUI |
+| `~/.config/ghost/prompts/` | Prompt files |
+| `~/.config/ghost/themes/` | Your themes |
+| `~/.local/share/ghost/ghost.db` | Reviews, audit trail and spend (SQLite) |
+| `~/.cache/ghost/` | Blobless clones of reviewed repos, and per-review checkouts (removed after each review) |
+
+These follow `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` when set.
+
+## Development
+
+```bash
+go test -race ./...
+go vet ./...
+```
+
+The design docs and implementation plans are in [`docs/superpowers/`](docs/superpowers). Work is tracked with [beads](https://github.com/gastownhall/beads) (`bd ready`).
