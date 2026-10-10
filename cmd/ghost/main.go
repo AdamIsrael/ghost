@@ -22,6 +22,7 @@ import (
 	"github.com/AdamIsrael/ghost/internal/preflight"
 	subproc "github.com/AdamIsrael/ghost/internal/run"
 	"github.com/AdamIsrael/ghost/internal/store"
+	"github.com/AdamIsrael/ghost/internal/theme"
 	"github.com/AdamIsrael/ghost/internal/tui"
 	"github.com/AdamIsrael/ghost/internal/workspace"
 )
@@ -134,6 +135,11 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
+	themes, err := theme.Load(cfg.ThemesDir())
+	if err != nil { // already validated by config.Load; kept for safety
+		fmt.Fprintln(stderr, "ghost:", err)
+		return 1
+	}
 	st, err := store.Open(*dbPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "ghost:", err)
@@ -149,6 +155,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		Theme:           cfg.Theme,
 		NoColor:         os.Getenv("NO_COLOR") != "",
 		ConfigPath:      *cfgPath,
+		Themes:          themes,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -239,11 +246,19 @@ func runCheck(cfgPath string, stdout io.Writer, runner preflight.Runner) int {
 			fmt.Fprintf(stdout, "          fix: %s\n", r.Fix)
 		}
 	}
-	if _, err := config.Load(cfgPath); err != nil {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
 		ok = false
 		fmt.Fprintf(stdout, "✗ %-7s %v\n", "config", err)
 	} else {
 		fmt.Fprintf(stdout, "✓ %-7s %s\n", "config", cfgPath)
+		if themes, err := theme.Load(cfg.ThemesDir()); err == nil {
+			if p, found := themes.Get(cfg.Theme); found && p.Source != "built-in" {
+				for _, problem := range p.ReadabilityProblems() {
+					fmt.Fprintf(stdout, "! %-7s %s: %s\n", "theme", p.ID, problem)
+				}
+			}
+		}
 	}
 	if !ok {
 		return 1

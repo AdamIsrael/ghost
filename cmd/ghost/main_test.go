@@ -245,3 +245,22 @@ func TestTUISaveWritesViewsFileOnly(t *testing.T) {
 		t.Errorf("views.toml =\n%s", views)
 	}
 }
+
+func TestCheckWarnsAboutUnreadableUserTheme(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	var out, errb bytes.Buffer
+	run([]string{"--config", cfg, "init"}, &out, &errb, depsFor(okRunner))
+	os.MkdirAll(filepath.Join(dir, "themes"), 0o755)
+	os.WriteFile(filepath.Join(dir, "themes", "dim.toml"),
+		[]byte("background = \"#1a1b26\"\nforeground = \"#c0caf5\"\nmuted = \"#3b4261\"\n"), 0o644)
+	data, _ := os.ReadFile(cfg)
+	os.WriteFile(cfg, []byte(strings.Replace(string(data), `theme = "auto"`, `theme = "dim"`, 1)), 0o644)
+	out.Reset()
+	if code := run([]string{"--config", cfg, "--check"}, &out, &errb, depsFor(okRunner)); code != 0 {
+		t.Fatalf("a readability warning must not fail --check: %d\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "theme") || !strings.Contains(out.String(), "muted contrast") {
+		t.Errorf("no readability warning:\n%s", out.String())
+	}
+}
