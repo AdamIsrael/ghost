@@ -281,6 +281,10 @@ func (e *Engine) review(ctx context.Context, r *store.Review) error {
 	r.State = store.Ready
 	e.save(r)
 	e.audit(r.PRID, r.ID, "reviewed", fmt.Sprintf("%s, %d comments, $%.2f", res.Verdict, len(res.Comments), res.CostUSD))
+	if e.cfg.PostMode == "auto" {
+		_ = e.post(ctx, r) // a failed post leaves it ready; audited by post
+		return nil
+	}
 	e.audit(r.PRID, r.ID, "ready to post", "press P to post it")
 	return nil
 }
