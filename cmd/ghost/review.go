@@ -67,6 +67,9 @@ func runReview(cfgPath string, args []string, stdout, stderr io.Writer, d deps) 
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
+	if pr.Repo != "" {
+		repo = pr.Repo // GitHub's canonical name, so CLI/cli and cli/cli share a clone
+	}
 	rendered, err := engine.RenderPrompt(&cfg, name, pr)
 	if err != nil {
 		fmt.Fprintln(stderr, "ghost:", err)

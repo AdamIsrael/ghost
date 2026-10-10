@@ -59,3 +59,16 @@ func TestRunGhNotAuthenticated(t *testing.T) {
 		t.Fatalf("gh result = %+v", r)
 	}
 }
+
+func TestGhAuthFailureShowsGhMessage(t *testing.T) {
+	run := func(_ context.Context, name string, args ...string) (string, error) {
+		if name == "gh" && len(args) > 0 && args[0] == "auth" {
+			return "error connecting to api.github.com\ncheck your internet connection", errors.New("exit status 1")
+		}
+		return name + " 1.0", nil
+	}
+	r := find(Run(context.Background(), run), "gh")
+	if r.OK || !strings.Contains(r.Detail, "error connecting to api.github.com") {
+		t.Fatalf("gh result = %+v", r)
+	}
+}

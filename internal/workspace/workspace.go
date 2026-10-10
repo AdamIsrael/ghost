@@ -189,6 +189,10 @@ func (m *Manager) addWorktree(ctx context.Context, bare, headSHA string) (string
 	if err != nil {
 		return "", err
 	}
+	if m.git(ctx, bare, "cat-file", "-e", headSHA+"^{commit}") != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("PR head %.7s is no longer on the PR (new commits were pushed?); run the review again", headSHA)
+	}
 	if err := m.git(ctx, bare, "worktree", "add", "--quiet", "--detach", dir, headSHA); err != nil {
 		os.RemoveAll(dir)
 		return "", err

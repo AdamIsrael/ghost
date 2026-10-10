@@ -162,8 +162,9 @@ func TestParsePRRef(t *testing.T) {
 		"https://github.com/o/r/pull/7/files":           {"o/r", 7},
 		"https://github.com/o/r/pull/7#discussion_r1":   {"o/r", 7},
 		"http://github.com/Org-1/repo.name/pull/12?x=1": {"Org-1/repo.name", 12},
-		"o/r#7":     {"o/r", 7},
-		"  o/r#7  ": {"o/r", 7},
+		"https://www.github.com/o/r/pull/9":             {"o/r", 9},
+		"o/r#7":                                         {"o/r", 7},
+		"  o/r#7  ":                                     {"o/r", 7},
 	}
 	for in, want := range good {
 		repo, n, err := ParsePRRef(in)

@@ -145,8 +145,8 @@ func TestCheckoutUnknownSHAFails(t *testing.T) {
 	m := New(t.TempDir(), fakeGh(rdir, &clones))
 	_, cleanup, err := m.Checkout(context.Background(), "o/r", 7, "main", strings.Repeat("0", 40))
 	cleanup()
-	if err == nil {
-		t.Fatal("want error for SHA not in the PR")
+	if err == nil || !strings.Contains(err.Error(), "new commits") {
+		t.Fatalf("want a clear head-moved error, got %v", err)
 	}
 }
 

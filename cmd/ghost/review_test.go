@@ -160,3 +160,22 @@ func TestReviewOutputIsSanitized(t *testing.T) {
 		t.Errorf("control characters reached the terminal: %q", out.String())
 	}
 }
+
+func TestReviewUsesCanonicalRepoName(t *testing.T) {
+	h, d := newReviewHarness(t, "")
+	var checkedOut string
+	d.getPR = func(_ context.Context, repo string, n int) (github.PRDetail, error) {
+		return github.PRDetail{PR: github.PR{Repo: "cli/cli", Number: n, Title: "T", BaseRef: "main", HeadSHA: "abc"}}, nil
+	}
+	d.checkout = func(_ context.Context, repo string, n int, base, sha string) (workspace.Workspace, func(), error) {
+		checkedOut = repo
+		return workspace.Workspace{Dir: "/wt"}, func() {}, nil
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"--config", h.cfg, "review", "CLI/CLI#7", "--dry-run"}, &out, &errb, d); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if checkedOut != "cli/cli" {
+		t.Errorf("checkout used %q; want GitHub's canonical name so case variants share one clone", checkedOut)
+	}
+}

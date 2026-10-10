@@ -65,8 +65,12 @@ func gh(ctx context.Context, run Runner) Result {
 	}
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
-	if _, err := run(ctx, "gh", "auth", "status"); err != nil {
-		return Result{Name: "gh", Detail: "not authenticated", Fix: "run `gh auth login`"}
+	if out, err := run(ctx, "gh", "auth", "status"); err != nil {
+		detail := "not authenticated"
+		if line := strings.TrimSpace(firstLine(out)); line != "" {
+			detail = line // gh's own reason: logged out, network, expired token…
+		}
+		return Result{Name: "gh", Detail: detail, Fix: "run `gh auth status` for details, or `gh auth login`"}
 	}
 	return r
 }

@@ -255,3 +255,10 @@ func TestValidateViewsChecksOnlyViews(t *testing.T) {
 		}
 	}
 }
+
+func TestPerReviewCapAboveDailyCapIsAnError(t *testing.T) {
+	cfg := mustParse(t, "max_daily_cost_usd = 1.0\nmax_cost_per_review_usd = 2.0\n"+minimal)
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "no review could ever start") {
+		t.Fatalf("want cap error, got %v", err)
+	}
+}

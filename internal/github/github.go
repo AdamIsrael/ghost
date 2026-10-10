@@ -239,7 +239,7 @@ func (c *Client) GetPR(ctx context.Context, repo string, number int) (PRDetail, 
 }
 
 var (
-	prURL   = regexp.MustCompile(`^https?://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)(?:[/?#].*)?$`)
+	prURL   = regexp.MustCompile(`^https?://(?:www\.)?github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)(?:[/?#].*)?$`)
 	prShort = regexp.MustCompile(`^([\w.-]+/[\w.-]+)#(\d+)$`)
 )
 
