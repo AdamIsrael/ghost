@@ -31,6 +31,7 @@ type Options struct {
 	SaveViews       func([]config.View) error // persists views; nil disables n/e/d
 	Theme           string                    // config theme; "" = dark
 	NoColor         bool                      // NO_COLOR set: force mono
+	ConfigPath      string                    // shown when suggesting a theme setting
 	Agents          []string                  // agent names for the view form
 }
 
@@ -105,11 +106,15 @@ func resolveTheme(o Options) (Theme, bool) {
 		t, _ := themeByName("mono")
 		return t, false
 	}
-	if t, ok := themeByName(o.Theme); ok {
+	if t, ok := themeByName(o.Theme); ok && o.Theme != "auto" {
 		return t, false
 	}
+	if o.Theme == "auto" {
+		t, _ := themeByName("auto")
+		return t, true
+	}
 	t, _ := themeByName("dark")
-	return t, o.Theme == "auto"
+	return t, false
 }
 
 func (m Model) Init() tea.Cmd {
@@ -314,11 +319,19 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 			return engineDoneMsg{"approve", e.Approve(context.Background(), repo, n)}
 		}
 	case "t":
+		if m.opts.NoColor {
+			m.flash = "NO_COLOR is set, so colors are off; unset it to use themes"
+			return m, nil
+		}
 		i := slices.Index(themeOrder, m.theme.Name)
 		next := themeOrder[(i+1)%len(themeOrder)]
 		m.theme, _ = themeByName(next)
 		m.autoTheme = false
-		m.flash = fmt.Sprintf(`theme: %s (add theme = "%s" to config.toml to keep it)`, next, next)
+		where := m.opts.ConfigPath
+		if where == "" {
+			where = "config.toml"
+		}
+		m.flash = fmt.Sprintf(`theme: %s (add theme = "%s" to %s to keep it)`, next, next, where)
 	case "n":
 		if m.opts.SaveViews == nil {
 			m.flash = "view editing is unavailable"

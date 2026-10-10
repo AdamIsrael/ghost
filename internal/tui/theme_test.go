@@ -63,10 +63,19 @@ func TestThemeFromOptions(t *testing.T) {
 	}
 }
 
+// keepDefaultTheme restores the package styles after a test that renders.
+func keepDefaultTheme(t *testing.T) {
+	t.Cleanup(func() {
+		th, _ := themeByName("dark")
+		th.apply()
+	})
+}
+
 func TestAutoThemeFollowsBackground(t *testing.T) {
 	m := tea.Model(New(Options{Theme: "auto"}))
-	if themeOf(m) != "dark" {
-		t.Fatalf("auto starts as dark, got %q", themeOf(m))
+	if themeOf(m) != "auto" || !noColor(m.(Model).theme.Muted.GetForeground()) {
+		t.Fatalf("until the terminal answers, auto must be readable on any background: %q %v",
+			themeOf(m), m.(Model).theme.Muted.GetForeground())
 	}
 	m, _ = m.Update(tea.BackgroundColorMsg{Color: color.White})
 	if themeOf(m) != "light" {
@@ -84,9 +93,10 @@ func TestAutoThemeFollowsBackground(t *testing.T) {
 }
 
 func TestThemeKeyCycles(t *testing.T) {
-	m := send(t, New(Options{Views: twoViews, Theme: "dark"}), tea.WindowSizeMsg{Width: 160, Height: 10})
+	keepDefaultTheme(t)
+	m := send(t, New(Options{Views: twoViews, Theme: "dark", ConfigPath: "/home/me/.config/ghost/config.toml"}), tea.WindowSizeMsg{Width: 200, Height: 10})
 	m = send(t, m, key("t"))
-	if themeOf(m) != "light" || !strings.Contains(screen(m), `theme = "light"`) {
+	if themeOf(m) != "light" || !strings.Contains(screen(m), `theme = "light"`) || !strings.Contains(screen(m), "/home/me/.config/ghost/config.toml") {
 		t.Fatalf("theme %q screen:\n%s", themeOf(m), screen(m))
 	}
 	for i := 0; i < 3; i++ {
@@ -102,9 +112,25 @@ func TestThemeKeyCycles(t *testing.T) {
 }
 
 func TestThemeChangesRenderedOutput(t *testing.T) {
+	keepDefaultTheme(t)
 	dark := send(t, New(Options{Views: twoViews, Theme: "dark"}), tea.WindowSizeMsg{Width: 120, Height: 10}).View().Content
 	mono := send(t, New(Options{Views: twoViews, Theme: "mono"}), tea.WindowSizeMsg{Width: 120, Height: 10}).View().Content
 	if dark == mono {
 		t.Error("themes should render differently")
+	}
+}
+
+func TestHighContrastMutedReadableOnAnyBackground(t *testing.T) {
+	th, _ := themeByName("high-contrast")
+	if !noColor(th.Muted.GetForeground()) {
+		t.Errorf("high-contrast muted must use the terminal's own foreground, got %v", th.Muted.GetForeground())
+	}
+}
+
+func TestThemeKeyUnderNoColor(t *testing.T) {
+	keepDefaultTheme(t)
+	m := send(t, New(Options{Views: twoViews, NoColor: true}), tea.WindowSizeMsg{Width: 160, Height: 10}, key("t"))
+	if themeOf(m) != "mono" || !strings.Contains(screen(m), "NO_COLOR") {
+		t.Errorf("theme %q screen:\n%s", themeOf(m), screen(m))
 	}
 }

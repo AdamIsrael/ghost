@@ -27,8 +27,15 @@ func themeByName(name string) (Theme, bool) {
 	case "light":
 		return Theme{name, s.Foreground(lipgloss.Color("240")), s.Foreground(lipgloss.Color("1")),
 			s.Bold(true), s.Reverse(true), s.Bold(true).Reverse(true)}, true
+	case "auto":
+		// Provisional until the terminal reports its background: muted text
+		// in the terminal's own foreground stays readable on dark and light.
+		return Theme{name, s, s.Foreground(lipgloss.Color("1")),
+			s.Bold(true), s.Reverse(true), s.Bold(true).Reverse(true)}, true
 	case "high-contrast":
-		return Theme{name, s.Foreground(lipgloss.Color("15")), s.Foreground(lipgloss.Color("9")).Bold(true),
+		// Muted uses the terminal's own foreground so it is readable on any
+		// background; hierarchy comes from bold and underline instead.
+		return Theme{name, s, s.Foreground(lipgloss.Color("9")).Bold(true),
 			s.Bold(true).Underline(true), s.Bold(true).Reverse(true), s.Bold(true).Reverse(true).Underline(true)}, true
 	case "mono":
 		return Theme{name, s, s.Bold(true), s.Bold(true), s.Reverse(true), s.Bold(true).Reverse(true)}, true

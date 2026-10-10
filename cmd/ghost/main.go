@@ -148,6 +148,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		OpenURL:         d.openURL,
 		Theme:           cfg.Theme,
 		NoColor:         os.Getenv("NO_COLOR") != "",
+		ConfigPath:      *cfgPath,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
