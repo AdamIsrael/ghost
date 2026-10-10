@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -20,6 +21,30 @@ var (
 	selected  = lipgloss.NewStyle().Reverse(true)
 	errText   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 )
+
+// clean makes untrusted GitHub text safe to draw: CRLF becomes LF, tabs
+// expand, and every other control character is dropped — including ESC, so
+// PR text cannot inject terminal escape sequences, and CR, which would
+// redraw from the screen's left edge.
+func clean(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteRune(r)
+		case r == '\t':
+			b.WriteString("    ")
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r == utf8.RuneError:
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// cleanLine is clean for single-line fields: newlines become spaces.
+func cleanLine(s string) string { return strings.ReplaceAll(clean(s), "\n", " ") }
 
 // fit truncates s with "…" and pads it to exactly w terminal cells.
 func fit(s string, w int) string {
@@ -64,7 +89,7 @@ func renderFilterBar(views []config.View, active int, counts map[string]int, wid
 
 func renderRow(pr github.PR, width int, sel bool) string {
 	st := pr.Status()
-	line := fit(fmt.Sprintf("%s %-17s %s#%d %s", st.Icon(), st, pr.Repo, pr.Number, pr.Title), width)
+	line := fit(fmt.Sprintf("%s %-17s %s#%d %s", st.Icon(), st, cleanLine(pr.Repo), pr.Number, cleanLine(pr.Title)), width)
 	if sel {
 		return selected.Render(line)
 	}
@@ -112,23 +137,23 @@ func renderDetail(pr *github.PR, width, height int) string {
 		return block([]string{dim.Render("No pull request selected")}, width, height)
 	}
 	st := pr.Status()
-	sha := pr.HeadSHA
+	sha := cleanLine(pr.HeadSHA)
 	if len(sha) > 7 {
 		sha = sha[:7]
 	}
 	ls := []string{
-		bold.Render(fmt.Sprintf("%s#%d  %s", pr.Repo, pr.Number, pr.Title)),
-		fmt.Sprintf("by @%s  +%d −%d  %d files", pr.Author, pr.Additions, pr.Deletions, pr.ChangedFiles),
-		fmt.Sprintf("Status: %s %s   CI: %s   Review: %s", st.Icon(), st, ciLabel(pr.CIState), reviewLabel(pr.ReviewDecision)),
-		fmt.Sprintf("%s → %s  (%s)", pr.HeadRef, pr.BaseRef, sha),
-		dim.Render(pr.URL),
+		bold.Render(fmt.Sprintf("%s#%d  %s", cleanLine(pr.Repo), pr.Number, cleanLine(pr.Title))),
+		fmt.Sprintf("by @%s  +%d −%d  %d files", cleanLine(pr.Author), pr.Additions, pr.Deletions, pr.ChangedFiles),
+		fmt.Sprintf("Status: %s %s   CI: %s   Review: %s", st.Icon(), st, cleanLine(ciLabel(pr.CIState)), cleanLine(reviewLabel(pr.ReviewDecision))),
+		fmt.Sprintf("%s → %s  (%s)", cleanLine(pr.HeadRef), cleanLine(pr.BaseRef), sha),
+		dim.Render(cleanLine(pr.URL)),
 		"",
 		bold.Render("── Audit trail ──"),
 		dim.Render("No activity yet. Automated reviews arrive in a later milestone."),
 		"",
 		bold.Render("── Description ──"),
 	}
-	body := strings.TrimSpace(pr.Body)
+	body := strings.TrimSpace(clean(pr.Body))
 	if body == "" {
 		ls = append(ls, dim.Render("(no description)"))
 	} else {
@@ -168,7 +193,7 @@ func renderStatusBar(si statusInfo, width int) string {
 	}
 	line := strings.Join(parts, " · ")
 	if si.Err != "" {
-		line += "  " + errText.Render("⚠ "+si.Err)
+		line += "  " + errText.Render("⚠ "+cleanLine(si.Err))
 	}
 	return fit(line, width)
 }

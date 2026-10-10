@@ -97,3 +97,40 @@ func TestRenderStatusBar(t *testing.T) {
 		t.Error("zero LastPoll should render as —")
 	}
 }
+
+func TestRenderDetailNormalizesCRLF(t *testing.T) {
+	pr := samplePR(1, "t")
+	pr.Body = "line one here\r\nline two"
+	raw := renderDetail(&pr, 60, 20)
+	if strings.Contains(raw, "\r") {
+		t.Error("carriage return reached the terminal")
+	}
+	out := ansi.Strip(raw)
+	if !strings.Contains(out, "line one here") || !strings.Contains(out, "line two") {
+		t.Errorf("body lines missing:\n%s", out)
+	}
+}
+
+func TestRenderStripsControlAndEscapeSequences(t *testing.T) {
+	pr := samplePR(1, "evil\r✓ Approved \x1b[8mhidden\x07\x9b")
+	pr.Body = "x\x1bP tmux;\x1b\x1b]52;c;ZXZpbA==\x07\x1b\\ y\tz"
+	pr.Author = "bad\nactor"
+	for name, raw := range map[string]string{
+		"row":    renderRow(pr, 80, false),
+		"detail": renderDetail(&pr, 80, 20),
+	} {
+		if strings.ContainsAny(raw, "\r\x07\x9b") || strings.Contains(raw, "\x1b[8m") || strings.Contains(raw, "\x1bP") || strings.Contains(raw, "\x1b]52") {
+			t.Errorf("%s: control or escape sequence reached the terminal: %q", name, raw)
+		}
+	}
+	out := ansi.Strip(renderDetail(&pr, 80, 20))
+	if !strings.Contains(out, "@bad actor") || !strings.Contains(out, "y    z") {
+		t.Errorf("single-line fields should fold newlines; tabs should expand:\n%s", out)
+	}
+}
+
+func TestRenderStatusBarStripsControls(t *testing.T) {
+	if raw := renderStatusBar(statusInfo{Err: "boom\r\x1b]0;title\x07"}, 100); strings.ContainsAny(raw, "\r\x07") || strings.Contains(raw, "\x1b]0") {
+		t.Errorf("status bar passed control chars: %q", raw)
+	}
+}

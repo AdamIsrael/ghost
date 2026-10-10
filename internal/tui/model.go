@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -183,12 +184,22 @@ func (m Model) statusErr() string {
 	if m.flash != "" {
 		return m.flash
 	}
+	// A view that failed outright outranks one that only hid some PRs.
+	var warning string
 	for _, v := range m.opts.Views {
-		if err := m.errs[v.Name]; err != nil {
+		err := m.errs[v.Name]
+		if err == nil {
+			continue
+		}
+		var pe *github.PartialError
+		if !errors.As(err, &pe) {
 			return fmt.Sprintf("%s: %v", v.Name, err)
 		}
+		if warning == "" {
+			warning = fmt.Sprintf("%s: %v", v.Name, err)
+		}
 	}
-	return ""
+	return warning
 }
 
 const minDetailWidth = 30

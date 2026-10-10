@@ -200,3 +200,12 @@ func TestPartialResultShowsPRsAndWarning(t *testing.T) {
 		t.Errorf("want visible PR and hidden-PR warning:\n%s", out)
 	}
 }
+
+func TestStatusErrorPrefersTotalFailures(t *testing.T) {
+	m := send(t, New(Options{Views: twoViews}), tea.WindowSizeMsg{Width: 200, Height: 10},
+		resultMsg(poller.Result{View: "Team", PRs: []github.PR{samplePR(1, "x")}, Err: &github.PartialError{Hidden: 6, Reason: "SAML"}, At: time.Now()}),
+		resultMsg(poller.Result{View: "Mine", Err: errors.New("HTTP 502"), At: time.Now()}))
+	if out := screen(m); !strings.Contains(out, "Mine: HTTP 502") {
+		t.Errorf("a total failure should outrank a partial warning:\n%s", out)
+	}
+}

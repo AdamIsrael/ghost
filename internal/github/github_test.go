@@ -121,3 +121,10 @@ func TestSearchPRsFailsOnQueryLevelGraphQLError(t *testing.T) {
 		t.Fatalf("query-level error should fail the search: prs=%v err=%v", prs, err)
 	}
 }
+
+func TestSearchErrorOmitsQuery(t *testing.T) {
+	_, err := New(&fakeGQL{err: errors.New("HTTP 502")}).SearchPRs(context.Background(), "repo:secret/long-query is:open")
+	if err == nil || strings.Contains(err.Error(), "secret/long-query") || !strings.Contains(err.Error(), "HTTP 502") {
+		t.Fatalf("error should carry the cause, not the query: %v", err)
+	}
+}

@@ -140,7 +140,7 @@ func (c *Client) SearchPRs(ctx context.Context, query string) ([]PR, error) {
 	err := c.gql.DoWithContext(ctx, searchQuery, vars, &resp)
 	hidden := partial(err)
 	if err != nil && hidden == nil {
-		return nil, fmt.Errorf("search %q: %w", query, err)
+		return nil, fmt.Errorf("search: %w", err)
 	}
 	prs := make([]PR, 0, len(resp.Search.Nodes))
 	for _, n := range resp.Search.Nodes {
