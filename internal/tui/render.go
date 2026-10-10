@@ -62,11 +62,30 @@ func (sty styles) renderFilterBar(views []config.View, active int, counts map[st
 
 func (sty styles) renderRow(pr github.PR, width int, sel bool) string {
 	st := pr.Status()
-	line := fit(fmt.Sprintf("%s %-17s %s#%d %s", st.Icon(), st, cleanLine(pr.Repo), pr.Number, cleanLine(pr.Title)), width)
+	head := fmt.Sprintf("%s %-17s", st.Icon(), st)
+	headStyle, restStyle := sty.status(st), lipgloss.NewStyle()
 	if sel {
-		return sty.selected.Render(line)
+		headStyle, restStyle = sty.onSelection(headStyle), sty.onSelection(restStyle)
 	}
-	return line
+	hw := lipgloss.Width(head)
+	if width <= hw {
+		return headStyle.Render(fit(head, width))
+	}
+	rest := fit(fmt.Sprintf(" %s#%d %s", cleanLine(pr.Repo), pr.Number, cleanLine(pr.Title)), width-hw)
+	return headStyle.Render(head) + restStyle.Render(rest)
+}
+
+func (sty styles) ciStyled(state string) string {
+	label := cleanLine(ciLabel(state))
+	switch state {
+	case "SUCCESS":
+		return sty.success.Render(label)
+	case "PENDING", "EXPECTED":
+		return sty.warning.Render(label)
+	case "FAILURE", "ERROR":
+		return sty.err.Render(label)
+	}
+	return label
 }
 
 func (sty styles) renderList(prs []github.PR, cursor, width, height int, empty string) string {
@@ -116,8 +135,10 @@ func (sty styles) renderDetail(pr *github.PR, rs engine.PRState, width, height i
 	}
 	ls := []string{
 		sty.heading.Render(fmt.Sprintf("%s#%d  %s", cleanLine(pr.Repo), pr.Number, cleanLine(pr.Title))),
-		fmt.Sprintf("by @%s  +%d −%d  %d files", cleanLine(pr.Author), pr.Additions, pr.Deletions, pr.ChangedFiles),
-		fmt.Sprintf("Status: %s %s   CI: %s   Review: %s", st.Icon(), st, cleanLine(ciLabel(pr.CIState)), cleanLine(reviewLabel(pr.ReviewDecision))),
+		fmt.Sprintf("by %s  %s %s  %d files", sty.info.Render("@"+cleanLine(pr.Author)),
+			sty.success.Render(fmt.Sprintf("+%d", pr.Additions)), sty.err.Render(fmt.Sprintf("−%d", pr.Deletions)), pr.ChangedFiles),
+		fmt.Sprintf("Status: %s   CI: %s   Review: %s", sty.status(st).Render(fmt.Sprintf("%s %s", st.Icon(), st)),
+			sty.ciStyled(pr.CIState), cleanLine(reviewLabel(pr.ReviewDecision))),
 		fmt.Sprintf("%s → %s  (%s)", cleanLine(pr.HeadRef), cleanLine(pr.BaseRef), sha),
 		sty.muted.Render(cleanLine(pr.URL)),
 		"",
@@ -151,15 +172,15 @@ func (sty styles) renderStatusBar(si statusInfo, width int) string {
 		last = si.LastPoll.Format("15:04")
 	}
 	parts := []string{
-		fmt.Sprintf("Spend today $%.2f / $%.2f", si.SpendUSD, si.MaxDailyUSD),
+		fmt.Sprintf("Spend today %s / $%.2f", sty.warning.Render(fmt.Sprintf("$%.2f", si.SpendUSD)), si.MaxDailyUSD),
 		fmt.Sprintf("Reviews %d running · %d queued", si.Running, si.Queued),
 		"Last poll " + last,
 	}
 	if si.Paused {
-		parts = append(parts, "⏸ paused")
+		parts = append(parts, sty.warning.Render("⏸ paused"))
 	}
 	if si.BudgetPaused {
-		parts = append(parts, "budget reached")
+		parts = append(parts, sty.warning.Render("budget reached"))
 	}
 	var checks []string
 	for _, c := range si.Checks {
@@ -185,7 +206,7 @@ func (sty styles) reviewLines(st engine.PRState, prHead string, width int) []str
 		ls = append(ls, sty.muted.Render("No activity yet."))
 	}
 	for _, ev := range st.Audit {
-		ls = append(ls, fmt.Sprintf("%s %s — %s", ev.At.Local().Format("15:04"), cleanLine(ev.Kind), cleanLine(ev.Message)))
+		ls = append(ls, fmt.Sprintf("%s %s — %s", sty.muted.Render(ev.At.Local().Format("15:04")), cleanLine(ev.Kind), cleanLine(ev.Message)))
 	}
 	r := st.Latest
 	if r == nil {
@@ -193,12 +214,12 @@ func (sty styles) reviewLines(st engine.PRState, prHead string, width int) []str
 	}
 	waiting := r.State == store.Ready || r.State == store.PostUnknown || r.Approval == store.ApprovalPending
 	if waiting && prHead != "" && r.HeadSHA != prHead {
-		ls = append(ls, "", sty.err.Render(fmt.Sprintf("⚠ PR has new commits since this review (reviewed %.7s, now %.7s)",
+		ls = append(ls, "", sty.warning.Render(fmt.Sprintf("⚠ PR has new commits since this review (reviewed %.7s, now %.7s)",
 			cleanLine(r.HeadSHA), cleanLine(prHead))))
 	}
 	switch r.State {
 	case store.Ready:
-		ls = append(ls, "", sty.heading.Render(fmt.Sprintf("── Pending review: %s, $%.2f (press P to post) ──", cleanLine(r.Verdict), r.CostUSD)))
+		ls = append(ls, "", sty.special.Bold(true).Render(fmt.Sprintf("── Pending review: %s, $%.2f (press P to post) ──", cleanLine(r.Verdict), r.CostUSD)))
 		ls = append(ls, strings.Split(ansi.Wordwrap(clean(r.Summary), width, " "), "\n")...)
 		for _, c := range st.Comments {
 			ls = append(ls, fmt.Sprintf("%s:%d [%s] %s", cleanLine(c.Path), c.Line, cleanLine(c.Severity), cleanLine(c.Body)))
@@ -221,13 +242,13 @@ func (sty styles) approvalLine(r *store.Review) string {
 	note := cleanLine(r.ApprovalNote)
 	switch r.Approval {
 	case store.ApprovalPending:
-		return sty.heading.Render("── Approval pending: meets the auto-approve rules (press a to approve) ──")
+		return sty.special.Bold(true).Render("── Approval pending: meets the auto-approve rules (press a to approve) ──")
 	case store.ApprovalWaiting:
-		return "Approval waiting: " + note
+		return sty.warning.Render("Approval waiting: " + note)
 	case store.ApprovalApproving:
 		return "Approving…"
 	case store.ApprovalApproved:
-		return sty.heading.Render("✓ Approved")
+		return sty.success.Bold(true).Render("✓ Approved")
 	case store.ApprovalNo:
 		return sty.muted.Render("Not approved: " + note)
 	case store.ApprovalFailed:
