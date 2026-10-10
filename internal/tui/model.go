@@ -51,6 +51,8 @@ type Model struct {
 	flash    string
 	width    int
 	height   int
+	snap     engine.Snapshot // cached; refreshed on updates, never in View
+	prState  engine.PRState  // selected PR's state, cached likewise
 }
 
 type resultMsg poller.Result
@@ -127,7 +129,33 @@ func (m *Model) clampCursor() {
 	}
 }
 
+// Update handles msg, then refreshes cached engine state for messages that
+// can change it, so View never touches the database.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	nm, ok := next.(Model)
+	if !ok {
+		return next, cmd
+	}
+	switch msg.(type) {
+	case tea.WindowSizeMsg, resultMsg, changeMsg, engineDoneMsg, tea.KeyPressMsg:
+		nm.refresh()
+	}
+	return nm, cmd
+}
+
+func (m *Model) refresh() {
+	if m.opts.Engine == nil {
+		return
+	}
+	m.snap = m.opts.Engine.Snapshot()
+	m.prState = engine.PRState{}
+	if pr := m.selectedPR(); pr != nil {
+		m.prState = m.opts.Engine.PRState(pr.Repo, pr.Number)
+	}
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -298,14 +326,11 @@ func (m Model) render() string {
 		Err:         m.statusErr(),
 		Checks:      m.opts.Checks,
 	}
-	var st engine.PRState
+	st := m.prState
 	if m.opts.Engine != nil {
-		snap := m.opts.Engine.Snapshot()
+		snap := m.snap
 		si.SpendUSD, si.MaxDailyUSD = snap.SpendTodayUSD, snap.MaxDailyUSD
 		si.Running, si.Queued, si.Paused, si.BudgetPaused = snap.Running, snap.Queued, snap.Paused, snap.BudgetPaused
-		if pr := m.selectedPR(); pr != nil {
-			st = m.opts.Engine.PRState(pr.Repo, pr.Number)
-		}
 	}
 	bottom := renderStatusBar(si, m.width)
 	bodyH := m.height - 2

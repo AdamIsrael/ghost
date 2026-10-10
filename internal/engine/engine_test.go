@@ -372,3 +372,37 @@ func TestChangesNotifies(t *testing.T) {
 		t.Fatal("no change notification")
 	}
 }
+
+func TestBudgetFlagIsLive(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) { c.MaxDailyCostUSD = 2; c.MaxCostPerReviewUSD = 1.5 })
+	h.rev.res.CostUSD = 1.0
+	h.start()
+	h.poll("Team", ghPR(1, "a"), ghPR(2, "b"))
+	waitFor(t, "budget reached", func() bool { return h.e.Snapshot().BudgetPaused })
+	// The queued review leaves the queue some other way (e.g. a newer process).
+	r, _ := h.st.LatestReview("o/r", 2)
+	r.State = store.Failed
+	h.st.SaveReview(r)
+	if h.e.Snapshot().BudgetPaused {
+		t.Error("budget flag must clear when nothing is queued")
+	}
+}
+
+func TestRunWaitsForWorkers(t *testing.T) {
+	h := newHarness(t, nil)
+	h.rev.release = make(chan struct{}) // blocks until ctx is cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { h.e.Run(ctx); close(done) }()
+	h.poll("Team", ghPR(1, "a"))
+	waitFor(t, "running", func() bool { return h.rev.count() == 1 })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	if h.state(1) != store.Failed {
+		t.Errorf("Run returned before the worker recorded the interruption (state %q)", h.state(1))
+	}
+}

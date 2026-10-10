@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/cli/go-gh/v2/pkg/browser"
@@ -151,7 +152,17 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		Store: st, GetPR: d.getPR, Checkout: d.checkout, NewReviewer: d.newReviewer,
 		PostReview: d.postReview, HasReview: d.hasReview, Approve: d.approve,
 	})
-	go eng.Run(ctx)
+	engineDone := make(chan struct{})
+	go func() { eng.Run(ctx); close(engineDone) }()
+	// On return: stop the engine and give in-flight work a moment to record
+	// its outcome before the deferred store close.
+	defer func() {
+		cancel()
+		select {
+		case <-engineDone:
+		case <-time.After(10 * time.Second):
+		}
+	}()
 	opts.Engine = eng
 	if s, err := d.newSearcher(); err != nil {
 		opts.PollDisabled = "GitHub unavailable: " + err.Error()

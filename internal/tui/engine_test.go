@@ -26,6 +26,8 @@ type fakeEngine struct {
 	paused   bool
 	changes  chan struct{}
 	approved []string
+
+	snapCalls, stateCalls int
 }
 
 func (f *fakeEngine) Approve(_ context.Context, repo string, n int) error {
@@ -34,8 +36,8 @@ func (f *fakeEngine) Approve(_ context.Context, repo string, n int) error {
 }
 
 func (f *fakeEngine) HandlePoll(r poller.Result)         { f.polls = append(f.polls, r) }
-func (f *fakeEngine) Snapshot() engine.Snapshot          { return f.snap }
-func (f *fakeEngine) PRState(string, int) engine.PRState { return f.state }
+func (f *fakeEngine) Snapshot() engine.Snapshot          { f.snapCalls++; return f.snap }
+func (f *fakeEngine) PRState(string, int) engine.PRState { f.stateCalls++; return f.state }
 func (f *fakeEngine) Rereview(pr github.PR) error        { f.rereview = append(f.rereview, pr); return nil }
 func (f *fakeEngine) TogglePause() bool                  { f.paused = !f.paused; return f.paused }
 func (f *fakeEngine) Changes() <-chan struct{}           { return f.changes }
@@ -205,5 +207,44 @@ func TestFlashDoesNotRepeatPrefix(t *testing.T) {
 		engineDoneMsg{"approve", errors.New("approve: GitHub does not allow approving your own pull request")})
 	if out := screen(m); strings.Contains(out, "approve: approve:") || !strings.Contains(out, "approve: GitHub does not allow") {
 		t.Errorf("flash:\n%s", out)
+	}
+}
+
+func TestRenderDoesNotQueryEngine(t *testing.T) {
+	fe := &fakeEngine{}
+	m := withEngine(t, fe)
+	snaps, states := fe.snapCalls, fe.stateCalls
+	for i := 0; i < 5; i++ {
+		m.View()
+	}
+	if fe.snapCalls != snaps || fe.stateCalls != states {
+		t.Errorf("View queried the engine: snapshot %d→%d, state %d→%d", snaps, fe.snapCalls, states, fe.stateCalls)
+	}
+	m, _ = m.Update(changeMsg{})
+	if fe.snapCalls == snaps {
+		t.Error("an engine change should refresh the snapshot")
+	}
+}
+
+func TestCursorMoveRefreshesPRState(t *testing.T) {
+	fe := &fakeEngine{changes: make(chan struct{}, 1)}
+	m := send(t, New(Options{Views: twoViews, MaxDailyCostUSD: 10, Engine: fe}),
+		tea.WindowSizeMsg{Width: 160, Height: 30}, result("Team", samplePR(1, "First"), samplePR(2, "Second")))
+	before := fe.stateCalls
+	m, _ = m.Update(key("j"))
+	if fe.stateCalls == before {
+		t.Error("moving the cursor should load the newly selected PR's state")
+	}
+}
+
+func TestStaleReviewWarning(t *testing.T) {
+	fe := &fakeEngine{state: engine.PRState{Latest: &store.Review{State: store.Ready, HeadSHA: "0000000aaaa", Verdict: "comment", Summary: "S"}}}
+	out := screen(withEngine(t, fe)) // samplePR head is abc1234def
+	if !strings.Contains(out, "PR has new commits since this review") || !strings.Contains(out, "0000000") || !strings.Contains(out, "abc1234") {
+		t.Errorf("stale warning missing:\n%s", out)
+	}
+	fe.state.Latest.HeadSHA = "abc1234def"
+	if out := screen(withEngine(t, fe)); strings.Contains(out, "new commits") {
+		t.Error("no warning when the review matches the head")
 	}
 }

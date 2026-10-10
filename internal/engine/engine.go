@@ -55,13 +55,13 @@ type Engine struct {
 	wake    chan struct{}
 	changes chan struct{}
 
-	rereviewMu sync.Mutex // serializes Rereview's check-then-enqueue
-	recheckMu  sync.Mutex // one approval recheck at a time, off the Run loop
+	rereviewMu sync.Mutex     // serializes Rereview's check-then-enqueue
+	recheckMu  sync.Mutex     // one approval recheck at a time, off the Run loop
+	wg         sync.WaitGroup // workers and rechecks; Run waits for them
 
-	mu           sync.Mutex
-	paused       bool
-	budgetPaused bool
-	running      int
+	mu      sync.Mutex
+	paused  bool
+	running int
 }
 
 func New(cfg config.Config, d Deps) *Engine {
@@ -104,7 +104,8 @@ func (e *Engine) HandlePoll(r poller.Result) {
 }
 
 // Run settles reviews a previous process left in flight, then processes
-// poll results and runs reviews until ctx is cancelled.
+// poll results and runs reviews until ctx is cancelled. It returns once its
+// workers have finished.
 func (e *Engine) Run(ctx context.Context) {
 	if rs, err := e.d.Store.FailInterrupted(e.cfg.MaxCostPerReviewUSD); err == nil {
 		for _, r := range rs {
@@ -116,7 +117,8 @@ func (e *Engine) Run(ctx context.Context) {
 		}
 	}
 	for i := 0; i < e.cfg.MaxConcurrentReviews; i++ {
-		go e.worker(ctx)
+		e.wg.Add(1)
+		go func() { defer e.wg.Done(); e.worker(ctx) }()
 	}
 	t := time.NewTicker(tick)
 	defer t.Stop()
@@ -124,13 +126,16 @@ func (e *Engine) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			e.wg.Wait() // let workers record interruptions before the store closes
 			return
 		case r := <-e.polls:
 			e.enqueue(r)
 			// Rechecks may call GitHub; keep them off the loop. If one is
 			// still running, skip: the next poll carries the same PRs.
 			if e.recheckMu.TryLock() {
+				e.wg.Add(1)
 				go func(r poller.Result) {
+					defer e.wg.Done()
 					defer e.recheckMu.Unlock()
 					e.recheckApprovals(ctx, r)
 				}(r)
@@ -235,8 +240,6 @@ func (e *Engine) claim() *store.Review {
 		return nil
 	}
 	if spend+float64(e.running+1)*e.cfg.MaxCostPerReviewUSD > e.cfg.MaxDailyCostUSD {
-		queued, _ := e.d.Store.CountState(store.Queued)
-		e.budgetPaused = queued > 0
 		return nil
 	}
 	r, err := e.d.Store.ClaimNext()
@@ -248,7 +251,6 @@ func (e *Engine) claim() *store.Review {
 	if r == nil {
 		return nil
 	}
-	e.budgetPaused = false
 	e.running++
 	return r
 }
@@ -370,9 +372,12 @@ func (e *Engine) Snapshot() Snapshot {
 	queued, _ := e.d.Store.CountState(store.Queued)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// Computed live (same test as claim) so the flag can never go stale.
+	budget := !e.paused && queued > 0 &&
+		spend+float64(e.running+1)*e.cfg.MaxCostPerReviewUSD > e.cfg.MaxDailyCostUSD
 	return Snapshot{
 		SpendTodayUSD: spend, MaxDailyUSD: e.cfg.MaxDailyCostUSD,
-		Running: e.running, Queued: queued, Paused: e.paused, BudgetPaused: e.budgetPaused,
+		Running: e.running, Queued: queued, Paused: e.paused, BudgetPaused: budget,
 	}
 }
 

@@ -130,7 +130,7 @@ func renderDetail(pr *github.PR, rs engine.PRState, width, height int) string {
 		dim.Render(cleanLine(pr.URL)),
 		"",
 	}
-	ls = append(ls, reviewLines(rs, width)...)
+	ls = append(ls, reviewLines(rs, pr.HeadSHA, width)...)
 	ls = append(ls, "", bold.Render("── Description ──"))
 	body := strings.TrimSpace(clean(pr.Body))
 	if body == "" {
@@ -187,7 +187,7 @@ func renderStatusBar(si statusInfo, width int) string {
 	return fit(line, width)
 }
 
-func reviewLines(st engine.PRState, width int) []string {
+func reviewLines(st engine.PRState, prHead string, width int) []string {
 	ls := []string{bold.Render("── Audit trail ──")}
 	if len(st.Audit) == 0 {
 		ls = append(ls, dim.Render("No activity yet."))
@@ -198,6 +198,11 @@ func reviewLines(st engine.PRState, width int) []string {
 	r := st.Latest
 	if r == nil {
 		return ls
+	}
+	waiting := r.State == store.Ready || r.State == store.PostUnknown || r.Approval == store.ApprovalPending
+	if waiting && prHead != "" && r.HeadSHA != prHead {
+		ls = append(ls, "", errText.Render(fmt.Sprintf("⚠ PR has new commits since this review (reviewed %.7s, now %.7s)",
+			cleanLine(r.HeadSHA), cleanLine(prHead))))
 	}
 	switch r.State {
 	case store.Ready:
