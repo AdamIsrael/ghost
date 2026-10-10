@@ -10,6 +10,7 @@ import (
 
 	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/engine"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/textsafe"
 )
@@ -66,7 +67,7 @@ func runReview(cfgPath string, args []string, stdout, stderr io.Writer, d deps) 
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
-	rendered, err := renderReviewPrompt(&cfg, name, pr)
+	rendered, err := engine.RenderPrompt(&cfg, name, pr)
 	if err != nil {
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
@@ -101,22 +102,6 @@ func runReview(cfgPath string, args []string, stdout, stderr io.Writer, d deps) 
 	}
 	printReview(stdout, pr, name, res)
 	return 0
-}
-
-func renderReviewPrompt(cfg *config.Config, agentName string, pr github.PRDetail) (string, error) {
-	text, err := cfg.AgentPrompt(agentName)
-	if err != nil {
-		return "", err
-	}
-	rendered, err := config.RenderPrompt(text, config.PromptData{
-		Repo: pr.Repo, Number: pr.Number, Title: pr.Title, Author: pr.Author, Body: pr.Body,
-		BaseRef: pr.BaseRef, HeadRef: pr.HeadRef, HeadSHA: pr.HeadSHA, URL: pr.URL,
-		ChangedFiles: pr.Files,
-	})
-	if err != nil {
-		return "", fmt.Errorf("agents.%s prompt: %w", agentName, err)
-	}
-	return rendered, nil
 }
 
 // printReview writes the review to the terminal. PR text and agent output
