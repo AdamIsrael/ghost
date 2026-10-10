@@ -32,6 +32,7 @@ type Config struct {
 	MaxConcurrentReviews int              `toml:"max_concurrent_reviews"`
 	MaxDailyCostUSD      float64          `toml:"max_daily_cost_usd"`
 	MaxCostPerReviewUSD  float64          `toml:"max_cost_per_review_usd"`
+	PostMode             string           `toml:"post_mode"`
 	DefaultAgent         string           `toml:"default_agent"`
 	Agents               map[string]Agent `toml:"agents"`
 	AutoApprove          AutoApprove      `toml:"auto_approve"`
@@ -73,6 +74,7 @@ func Default() Config {
 		MaxConcurrentReviews: 2,
 		MaxDailyCostUSD:      10,
 		MaxCostPerReviewUSD:  1.5,
+		PostMode:             "confirm",
 		Agents:               map[string]Agent{},
 		AutoApprove: AutoApprove{
 			RequireConfirm:     true,

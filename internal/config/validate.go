@@ -35,6 +35,9 @@ func (c *Config) Validate() error {
 	if c.MaxCostPerReviewUSD <= 0 {
 		add("max_cost_per_review_usd must be greater than 0")
 	}
+	if c.PostMode != "confirm" && c.PostMode != "auto" {
+		add(`post_mode must be "confirm" or "auto"`)
+	}
 
 	switch {
 	case len(c.Agents) == 0:

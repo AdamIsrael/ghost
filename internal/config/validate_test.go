@@ -160,3 +160,18 @@ func TestValidateRejectsEmptyPrompt(t *testing.T) {
 		t.Fatalf("want empty prompt error, got %v", err)
 	}
 }
+
+func TestPostModeDefaultAndValidation(t *testing.T) {
+	cfg := mustParse(t, minimal)
+	if cfg.PostMode != "confirm" {
+		t.Errorf("default post_mode = %q, want confirm", cfg.PostMode)
+	}
+	cfg = mustParse(t, "post_mode = \"auto\"\n"+minimal)
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("auto rejected: %v", err)
+	}
+	cfg = mustParse(t, "post_mode = \"yolo\"\n"+minimal)
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "post_mode") {
+		t.Errorf("want post_mode error, got %v", err)
+	}
+}

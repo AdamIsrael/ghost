@@ -7,12 +7,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
+	now func() time.Time
 }
 
 // migrations are applied in order; PRAGMA user_version records how many ran.
@@ -54,6 +56,10 @@ var migrations = []string{
 		created_at TEXT    NOT NULL
 	);
 	CREATE INDEX audit_pr ON audit_events (pr_id, created_at);`,
+	`ALTER TABLE reviews ADD COLUMN comments TEXT NOT NULL DEFAULT '[]';
+	ALTER TABLE reviews ADD COLUMN error TEXT NOT NULL DEFAULT '';
+	CREATE INDEX reviews_state ON reviews (state, created_at);
+	CREATE INDEX reviews_finished ON reviews (finished_at);`,
 }
 
 // Open opens (creating if needed) the database at path and applies migrations.
@@ -76,7 +82,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, now: time.Now}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
@@ -119,3 +125,6 @@ func (s *Store) migrate() error {
 	}
 	return nil
 }
+
+// SetNow replaces the clock (tests).
+func (s *Store) SetNow(now func() time.Time) { s.now = now }

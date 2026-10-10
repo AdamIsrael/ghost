@@ -1,0 +1,154 @@
+package store
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/AdamIsrael/ghost/internal/github"
+)
+
+func openTest(t *testing.T) *Store {
+	t.Helper()
+	s, err := Open(filepath.Join(t.TempDir(), "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func clock(t time.Time) func() time.Time { return func() time.Time { return t } }
+
+func pr(n int, sha string) github.PR {
+	return github.PR{Repo: "o/r", Number: n, Title: "PR", Author: "a", URL: "u", HeadSHA: sha}
+}
+
+func TestUpsertPRIsIdempotent(t *testing.T) {
+	s := openTest(t)
+	id1, err := s.UpsertPR(pr(1, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := pr(1, "b")
+	p.Title = "Renamed"
+	id2, err := s.UpsertPR(p)
+	if err != nil || id1 != id2 {
+		t.Fatalf("ids %d/%d err %v", id1, id2, err)
+	}
+	var title, sha string
+	s.db.QueryRow(`SELECT title, head_sha FROM prs WHERE id = ?`, id1).Scan(&title, &sha)
+	if title != "Renamed" || sha != "b" {
+		t.Errorf("row = %q %q", title, sha)
+	}
+}
+
+func TestEnqueueDedupesByHeadSHA(t *testing.T) {
+	s := openTest(t)
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	if _, ok, err := s.EnqueueReview(prID, "a", "claude", false); !ok || err != nil {
+		t.Fatalf("first enqueue: %v %v", ok, err)
+	}
+	if _, ok, _ := s.EnqueueReview(prID, "a", "claude", false); ok {
+		t.Error("same head enqueued twice")
+	}
+	if _, ok, _ := s.EnqueueReview(prID, "a", "claude", true); !ok {
+		t.Error("force should enqueue")
+	}
+	if _, ok, _ := s.EnqueueReview(prID, "b", "claude", false); !ok {
+		t.Error("new head should enqueue")
+	}
+}
+
+func TestClaimNextOrderAndState(t *testing.T) {
+	s := openTest(t)
+	base := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	p1, _ := s.UpsertPR(pr(1, "a"))
+	p2, _ := s.UpsertPR(pr(2, "b"))
+	s.SetNow(clock(base))
+	id1, _, _ := s.EnqueueReview(p1, "a", "claude", false)
+	s.SetNow(clock(base.Add(time.Second)))
+	id2, _, _ := s.EnqueueReview(p2, "b", "claude", false)
+
+	r, err := s.ClaimNext()
+	if err != nil || r == nil || r.ID != id1 || r.State != Running || r.Repo != "o/r" || r.Number != 1 || r.HeadSHA != "a" {
+		t.Fatalf("first claim = %+v, %v", r, err)
+	}
+	if r, _ := s.ClaimNext(); r == nil || r.ID != id2 {
+		t.Fatalf("second claim = %+v", r)
+	}
+	if r, _ := s.ClaimNext(); r != nil {
+		t.Fatalf("third claim should be nil, got %+v", r)
+	}
+	if n, _ := s.CountState(Running); n != 2 {
+		t.Errorf("running = %d", n)
+	}
+}
+
+func TestSaveReviewAndLatest(t *testing.T) {
+	s := openTest(t)
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	s.SetNow(clock(now))
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	s.EnqueueReview(prID, "a", "claude", false)
+	r, _ := s.ClaimNext()
+	r.State, r.Verdict, r.Summary, r.Comments, r.CostUSD, r.Prompt = Ready, "comment", "ok", `[{"path":"a.go","line":1,"body":"x","severity":"nit"}]`, 0.42, "P"
+	if err := s.SaveReview(r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LatestReview("o/r", 1)
+	if err != nil || got == nil {
+		t.Fatalf("latest = %v, %v", got, err)
+	}
+	if got.State != Ready || got.Summary != "ok" || got.CostUSD != 0.42 || got.Prompt != "P" || !got.FinishedAt.Equal(now) {
+		t.Errorf("latest = %+v", got)
+	}
+	if missing, _ := s.LatestReview("o/r", 99); missing != nil {
+		t.Error("unknown PR should return nil")
+	}
+}
+
+func TestSpendSinceUsesFinishedAt(t *testing.T) {
+	s := openTest(t)
+	today := time.Date(2026, 10, 9, 0, 0, 0, 0, time.Local)
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	for i, at := range []time.Time{today.Add(-time.Hour), today.Add(time.Hour)} {
+		s.SetNow(clock(at))
+		s.EnqueueReview(prID, string(rune('a'+i)), "claude", true)
+		r, _ := s.ClaimNext()
+		r.State, r.CostUSD = Failed, 1.0+float64(i)
+		s.SaveReview(r)
+	}
+	if got, _ := s.SpendSince(today); got != 2.0 {
+		t.Errorf("spend today = %v, want 2.0 (yesterday's 1.0 excluded)", got)
+	}
+}
+
+func TestResetRunning(t *testing.T) {
+	s := openTest(t)
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	s.EnqueueReview(prID, "a", "claude", false)
+	s.ClaimNext()
+	if n, err := s.ResetRunning(); n != 1 || err != nil {
+		t.Fatalf("reset = %d, %v", n, err)
+	}
+	if n, _ := s.CountState(Queued); n != 1 {
+		t.Errorf("queued = %d", n)
+	}
+}
+
+func TestAuditOrderAndLimit(t *testing.T) {
+	s := openTest(t)
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	id, _, _ := s.EnqueueReview(prID, "a", "claude", false)
+	for _, k := range []string{"queued", "started", "reviewed"} {
+		if err := s.AddAudit(prID, id, k, k+" msg"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.AddAudit(prID, 0, "note", "no review")
+	ev, err := s.Audit("o/r", 1, 2)
+	if err != nil || len(ev) != 2 || ev[0].Kind != "reviewed" || ev[1].Kind != "note" || ev[1].ReviewID != 0 || ev[0].ReviewID != id {
+		t.Fatalf("audit = %+v, %v", ev, err)
+	}
+}

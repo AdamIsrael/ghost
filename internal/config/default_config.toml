@@ -5,6 +5,11 @@ max_concurrent_reviews = 2
 max_daily_cost_usd = 10.0
 max_cost_per_review_usd = 1.5
 
+# "confirm": finished reviews wait in the TUI until you press P to post them.
+# "auto": post as soon as a review finishes. Reviews that look like they
+# contain a secret are never posted in either mode.
+post_mode = "confirm"
+
 default_agent = "claude"
 
 [agents.claude]
