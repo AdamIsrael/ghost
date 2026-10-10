@@ -26,7 +26,9 @@ type Options struct {
 	PollNow         func()
 	PollDisabled    string // why polling is off; shown in empty lists
 	OpenURL         func(string) error
-	Engine          Engine // nil: browse only
+	Engine          Engine                    // nil: browse only
+	SaveViews       func([]config.View) error // persists views; nil disables n/e/d
+	Agents          []string                  // agent names for the view form
 }
 
 // Engine is what the TUI needs from the review engine.
@@ -53,6 +55,10 @@ type Model struct {
 	height   int
 	snap     engine.Snapshot // cached; refreshed on updates, never in View
 	prState  engine.PRState  // selected PR's state, cached likewise
+
+	views         []config.View // owned copy; edited with n/e/d
+	form          *viewForm
+	confirmDelete string // name of the view awaiting y/n
 }
 
 type resultMsg poller.Result
@@ -80,7 +86,8 @@ func waitForChange(e Engine) tea.Cmd {
 }
 
 func New(o Options) Model {
-	return Model{opts: o, prs: map[string][]github.PR{}, errs: map[string]error{}}
+	return Model{opts: o, prs: map[string][]github.PR{}, errs: map[string]error{},
+		views: append([]config.View(nil), o.Views...)}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -101,10 +108,10 @@ func waitForResult(ch <-chan poller.Result) tea.Cmd {
 }
 
 func (m Model) currentView() (config.View, bool) {
-	if len(m.opts.Views) == 0 {
+	if len(m.views) == 0 {
 		return config.View{}, false
 	}
-	return m.opts.Views[m.active], true
+	return m.views[m.active], true
 }
 
 func (m Model) currentPRs() []github.PR {
@@ -197,13 +204,19 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = "open failed: " + msg.err.Error()
 		}
 	case tea.KeyPressMsg:
+		switch {
+		case m.form != nil:
+			return m.handleFormKey(msg)
+		case m.confirmDelete != "":
+			return m.handleConfirmKey(msg.String())
+		}
 		return m.handleKey(msg.String())
 	}
 	return m, nil
 }
 
 func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
-	n := len(m.opts.Views)
+	n := len(m.views)
 	switch k {
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -256,6 +269,27 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg {
 			return engineDoneMsg{"approve", e.Approve(context.Background(), repo, n)}
 		}
+	case "n":
+		if m.opts.SaveViews == nil {
+			m.flash = "view editing is unavailable"
+			return m, nil
+		}
+		f := newViewForm(config.View{}, "", m.opts.Agents)
+		m.form = &f
+	case "e", "d":
+		v, ok := m.currentView()
+		switch {
+		case !ok:
+		case m.opts.SaveViews == nil:
+			m.flash = "view editing is unavailable"
+		case v.Source == "config.toml":
+			m.flash = fmt.Sprintf("view %q is defined in config.toml; edit it there", v.Name)
+		case k == "e":
+			f := newViewForm(v, v.Name, m.opts.Agents)
+			m.form = &f
+		default:
+			m.confirmDelete = v.Name
+		}
 	case "o", "enter":
 		pr := m.selectedPR()
 		if pr == nil || m.opts.OpenURL == nil {
@@ -288,12 +322,15 @@ func (m Model) emptyMessage() string {
 }
 
 func (m Model) statusErr() string {
+	if m.confirmDelete != "" {
+		return fmt.Sprintf("Delete view %q? y/n", m.confirmDelete)
+	}
 	if m.flash != "" {
 		return m.flash
 	}
 	// A view that failed outright outranks one that only hid some PRs.
 	var warning string
-	for _, v := range m.opts.Views {
+	for _, v := range m.views {
 		err := m.errs[v.Name]
 		if err == nil {
 			continue
@@ -319,7 +356,7 @@ func (m Model) render() string {
 	for name, prs := range m.prs {
 		counts[name] = len(prs)
 	}
-	top := renderFilterBar(m.opts.Views, m.active, counts, m.width)
+	top := renderFilterBar(m.views, m.active, counts, m.width)
 	si := statusInfo{
 		MaxDailyUSD: m.opts.MaxDailyCostUSD,
 		LastPoll:    m.lastPoll,
@@ -337,6 +374,9 @@ func (m Model) render() string {
 	if bodyH < 1 {
 		return top
 	}
+	if m.form != nil {
+		return lipgloss.JoinVertical(lipgloss.Left, top, m.form.render(m.width, bodyH), bottom)
+	}
 
 	listW := max(m.width*2/5, 20)
 	detailW := m.width - listW - 1
@@ -349,4 +389,62 @@ func (m Model) render() string {
 	detail := renderDetail(m.selectedPR(), st, detailW, bodyH)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, dim.Render(sep), detail)
 	return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
+}
+
+func (m Model) handleFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	f, act, cmd := m.form.update(msg)
+	switch act {
+	case formCancel:
+		m.form = nil
+		return m, nil
+	case formSave:
+		v := f.view()
+		v.Source = config.ViewsFileName
+		views := append([]config.View(nil), m.views...)
+		idx := len(views)
+		if f.editing == "" {
+			views = append(views, v)
+		} else {
+			for i := range views {
+				if views[i].Name == f.editing {
+					views[i], idx = v, i
+				}
+			}
+		}
+		if err := m.opts.SaveViews(views); err != nil {
+			f.err = err.Error()
+			m.form = &f
+			return m, nil
+		}
+		m.views, m.form = views, nil
+		m.active, m.cursor = idx, 0
+		m.flash = ""
+		return m, nil
+	}
+	m.form = &f
+	return m, cmd
+}
+
+func (m Model) handleConfirmKey(k string) (tea.Model, tea.Cmd) {
+	name := m.confirmDelete
+	m.confirmDelete = ""
+	if k != "y" {
+		return m, nil
+	}
+	var views []config.View
+	for _, v := range m.views {
+		if v.Name != name {
+			views = append(views, v)
+		}
+	}
+	if err := m.opts.SaveViews(views); err != nil {
+		m.flash = "delete: " + err.Error()
+		return m, nil
+	}
+	m.views = views
+	if m.active >= len(views) {
+		m.active = max(len(views)-1, 0)
+	}
+	m.cursor = 0
+	return m, nil
 }

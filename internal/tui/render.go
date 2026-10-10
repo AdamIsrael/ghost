@@ -65,7 +65,7 @@ func renderFilterBar(views []config.View, active int, counts map[string]int, wid
 		}
 		parts = append(parts, label)
 	}
-	return fit(strings.Join(parts, " ")+"  "+dim.Render("←/→ switch · o open · r review · P post · a approve · p pause · R refresh · q quit"), width)
+	return fit(strings.Join(parts, " ")+"  "+dim.Render("←/→ switch · n new · e edit · d delete · o open · r review · P post · a approve · p pause · R refresh · q quit"), width)
 }
 
 func renderRow(pr github.PR, width int, sel bool) string {
