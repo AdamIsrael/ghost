@@ -254,9 +254,15 @@ func TestApprovalFieldsRoundTrip(t *testing.T) {
 	if got.Approval != ApprovalWaiting || got.ApprovalNote != "CI is pending" {
 		t.Errorf("got %+v", got)
 	}
-	w, err := s.WaitingApprovals()
+	w, err := s.ApprovalsFor([]github.PR{pr(1, "a")}, ApprovalWaiting)
 	if err != nil || len(w) != 1 || w[0].ID != r.ID || w[0].Repo != "o/r" {
 		t.Fatalf("waiting = %+v, %v", w, err)
+	}
+	if other, _ := s.ApprovalsFor([]github.PR{pr(2, "b")}, ApprovalWaiting); len(other) != 0 {
+		t.Errorf("must only return reviews of the given PRs, got %+v", other)
+	}
+	if none, _ := s.ApprovalsFor(nil, ApprovalWaiting); len(none) != 0 {
+		t.Errorf("no PRs, no rows: %+v", none)
 	}
 	if ok, _ := s.TransitionApproval(r.ID, ApprovalWaiting, ApprovalApproving); !ok {
 		t.Fatal("transition failed")
@@ -264,7 +270,7 @@ func TestApprovalFieldsRoundTrip(t *testing.T) {
 	if ok, _ := s.TransitionApproval(r.ID, ApprovalWaiting, ApprovalApproving); ok {
 		t.Error("second transition from a stale state must fail")
 	}
-	if w, _ := s.WaitingApprovals(); len(w) != 0 {
+	if w, _ := s.ApprovalsFor([]github.PR{pr(1, "a")}, ApprovalWaiting); len(w) != 0 {
 		t.Errorf("no longer waiting, got %+v", w)
 	}
 }

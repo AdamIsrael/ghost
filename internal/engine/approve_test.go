@@ -273,3 +273,76 @@ func TestUnreadableCommentsAreNotEligible(t *testing.T) {
 		t.Fatalf("unreadable comments must block approval: %+v", d)
 	}
 }
+
+func greenPoll(h *harness, n int) {
+	pr := ghPR(n, "sha1")
+	pr.CIState = "SUCCESS"
+	h.e.HandlePoll(poller.Result{View: "Watch", PRs: []github.PR{pr}, At: time.Now()})
+}
+
+func TestAutoModeRetriesUnknownApprovalOnPoll(t *testing.T) {
+	h := approvingHarness(t, func(c *config.Config) { c.AutoApprove.RequireConfirm = false })
+	h.approveFn = func() error { return errors.New("connection reset") }
+	h.postedReview(t)
+	waitFor(t, "unknown", func() bool { return h.approval(1) == store.ApprovalUnknown })
+	h.mu.Lock()
+	h.approveFn = nil
+	h.mu.Unlock()
+	greenPoll(h, 1)
+	waitFor(t, "approved on poll", func() bool { return h.approval(1) == store.ApprovalApproved })
+	if h.approveCount() != 2 {
+		t.Errorf("approvals = %d (marker not on GitHub, so one retry)", h.approveCount())
+	}
+}
+
+func TestAutoModeGetPRFailureReleasesToWaiting(t *testing.T) {
+	h := approvingHarness(t, func(c *config.Config) { c.AutoApprove.RequireConfirm = false })
+	h.ci[1] = "PENDING"
+	h.postedReview(t)
+	h.mu.Lock()
+	h.getPRErr = errors.New("HTTP 502")
+	h.mu.Unlock()
+	greenPoll(h, 1) // eligible on poll data, but approve() can't read the PR
+	waitFor(t, "approve attempted", func() bool {
+		r, _ := h.st.LatestReview("o/r", 1)
+		return strings.Contains(r.ApprovalNote, "502")
+	})
+	if h.approval(1) != store.ApprovalWaiting {
+		t.Fatalf("auto mode must fall back to waiting, got %q", h.approval(1))
+	}
+	h.mu.Lock()
+	h.getPRErr, h.ci[1] = nil, "SUCCESS"
+	h.mu.Unlock()
+	greenPoll(h, 1)
+	waitFor(t, "approved after recovery", func() bool { return h.approval(1) == store.ApprovalApproved })
+}
+
+func TestUnknownNotRetriedWithoutHasReview(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.approveFn = func() error { return errors.New("connection reset") }
+	h.postedReview(t)
+	h.e.Approve(context.Background(), "o/r", 1)
+	h.e.d.HasReview = nil
+	h.mu.Lock()
+	h.approveFn = nil
+	h.mu.Unlock()
+	if err := h.e.Approve(context.Background(), "o/r", 1); err == nil || h.approveCount() != 1 {
+		t.Fatalf("err %v approvals %d: an unverifiable retry must not post", err, h.approveCount())
+	}
+}
+
+func TestRecheckDoesNotBlockPolls(t *testing.T) {
+	h := approvingHarness(t, func(c *config.Config) { c.AutoApprove.RequireConfirm = false })
+	release := make(chan struct{})
+	defer close(release)
+	h.ci[1] = "PENDING"
+	h.postedReview(t)
+	h.mu.Lock()
+	h.ci[1] = "SUCCESS"
+	h.approveFn = func() error { <-release; return nil }
+	h.mu.Unlock()
+	greenPoll(h, 1)
+	waitFor(t, "approval in flight", func() bool { return h.approveCount() == 1 })
+	h.poll("Team", ghPR(2, "sha2")) // must be handled while the approval is stuck
+	waitFor(t, "PR 2 queued while approving", func() bool { return h.state(2) != "" })
+}

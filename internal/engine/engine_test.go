@@ -56,6 +56,7 @@ type harness struct {
 	ci        map[int]string // PR number → CI state reported by GetPR (default SUCCESS)
 	approvals []string       // bodies passed to Approve
 	approveFn func() error
+	getPRErr  error
 	cancel    context.CancelFunc
 }
 
@@ -82,6 +83,9 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 		GetPR: func(_ context.Context, repo string, n int) (github.PRDetail, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
+			if h.getPRErr != nil {
+				return github.PRDetail{}, h.getPRErr
+			}
 			ci, ok := h.ci[n]
 			if !ok {
 				ci = "SUCCESS"

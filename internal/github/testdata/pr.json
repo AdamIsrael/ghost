@@ -2,6 +2,7 @@
   "repository": {
     "pullRequest": {
       "number": 7,
+      "state": "OPEN",
       "title": "Fix parser",
       "url": "https://github.com/o/r/pull/7",
       "body": "Fixes the parser.",

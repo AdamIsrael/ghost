@@ -56,6 +56,7 @@ type Engine struct {
 	changes chan struct{}
 
 	rereviewMu sync.Mutex // serializes Rereview's check-then-enqueue
+	recheckMu  sync.Mutex // one approval recheck at a time, off the Run loop
 
 	mu           sync.Mutex
 	paused       bool
@@ -126,7 +127,14 @@ func (e *Engine) Run(ctx context.Context) {
 			return
 		case r := <-e.polls:
 			e.enqueue(r)
-			e.recheckApprovals(ctx, r)
+			// Rechecks may call GitHub; keep them off the loop. If one is
+			// still running, skip: the next poll carries the same PRs.
+			if e.recheckMu.TryLock() {
+				go func(r poller.Result) {
+					defer e.recheckMu.Unlock()
+					e.recheckApprovals(ctx, r)
+				}(r)
+			}
 		case <-t.C:
 			e.poke()
 			e.notify()

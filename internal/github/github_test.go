@@ -53,7 +53,7 @@ func TestSearchPRsParsesFields(t *testing.T) {
 	want := PR{
 		Repo: "o/r", Number: 42, Title: "Add retries to fetcher", URL: "https://github.com/o/r/pull/42",
 		Author: "octocat", Body: "Retries transient errors.", BaseRef: "main", HeadRef: "retries",
-		HeadSHA: "abc1234def5678", ReviewDecision: "REVIEW_REQUIRED", CIState: "PENDING",
+		HeadSHA: "abc1234def5678", ReviewDecision: "REVIEW_REQUIRED", CIState: "PENDING", State: "OPEN",
 		Additions: 120, Deletions: 30, ChangedFiles: 4,
 		UpdatedAt: time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC),
 	}
@@ -135,7 +135,7 @@ func TestGetPR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Number != 7 || d.Title != "Fix parser" || d.HeadSHA != "deadbeef00" || d.CIState != "SUCCESS" || d.Author != "octocat" {
+	if d.Number != 7 || d.Title != "Fix parser" || d.HeadSHA != "deadbeef00" || d.CIState != "SUCCESS" || d.Author != "octocat" || d.State != "OPEN" {
 		t.Errorf("PR = %+v", d.PR)
 	}
 	if len(d.Files) != 2 || d.Files[0] != "parser.go" {

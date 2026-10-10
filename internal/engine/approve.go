@@ -93,17 +93,27 @@ func (e *Engine) setApproval(r *store.Review, state, note string) {
 	}
 }
 
-// recheckApprovals re-evaluates waiting approvals for PRs in a poll result.
+// recheckApprovals re-evaluates waiting approvals for the PRs in a poll
+// result. In auto mode it also retries approvals whose result is unknown
+// (approve checks GitHub for the earlier one first).
 func (e *Engine) recheckApprovals(ctx context.Context, res poller.Result) {
 	if !e.cfg.AutoApprove.Enabled || res.PRs == nil {
 		return
 	}
-	waiting, err := e.d.Store.WaitingApprovals()
-	if err != nil || len(waiting) == 0 {
+	states := []string{store.ApprovalWaiting}
+	if !e.cfg.AutoApprove.RequireConfirm {
+		states = append(states, store.ApprovalUnknown)
+	}
+	rs, err := e.d.Store.ApprovalsFor(res.PRs, states...)
+	if err != nil {
 		return
 	}
-	for i := range waiting {
-		r := &waiting[i]
+	for i := range rs {
+		r := &rs[i]
+		if r.Approval == store.ApprovalUnknown {
+			_ = e.approve(ctx, r)
+			continue
+		}
 		for _, pr := range res.PRs {
 			if pr.Repo == r.Repo && pr.Number == r.Number {
 				pr := pr
@@ -145,7 +155,12 @@ func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 	e.notify()
 	marker := approvalMarker(r.ID)
 
-	if from == store.ApprovalUnknown && e.d.HasReview != nil {
+	if from == store.ApprovalUnknown && e.d.HasReview == nil {
+		r.Approval = from
+		e.save(r)
+		return errors.New("cannot check GitHub for the earlier approval, so it is not retried")
+	}
+	if from == store.ApprovalUnknown {
 		found, err := e.d.HasReview(ctx, r.Repo, r.Number, marker)
 		if err != nil {
 			e.setApproval(r, store.ApprovalUnknown, "could not check GitHub: "+err.Error())
@@ -159,7 +174,13 @@ func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 
 	d, err := e.d.GetPR(ctx, r.Repo, r.Number)
 	if err != nil {
-		r.Approval = from // release the claim; nothing was sent
+		// Nothing was sent. In auto mode fall back to waiting so the next
+		// poll tries again; with confirm, hand it back to the operator.
+		if !e.cfg.AutoApprove.RequireConfirm && from == store.ApprovalPending {
+			e.setApproval(r, store.ApprovalWaiting, "could not read the PR's status: "+err.Error())
+			return err
+		}
+		r.Approval = from
 		e.save(r)
 		return err
 	}

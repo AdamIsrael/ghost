@@ -114,3 +114,19 @@ func TestSummaryIsReadable(t *testing.T) {
 		t.Errorf("summary = %q", s)
 	}
 }
+
+func TestClosedPRNotEligible(t *testing.T) {
+	for _, state := range []string{"CLOSED", "MERGED"} {
+		in := good()
+		in.PR.State = state
+		d := Evaluate(rules(), in)
+		if d.Eligible || d.Waiting || !strings.Contains(d.Summary(), strings.ToLower(state)) {
+			t.Errorf("%s: %+v", state, d)
+		}
+	}
+	in := good()
+	in.PR.State = "OPEN"
+	if !Evaluate(rules(), in).Eligible {
+		t.Error("open PR should stay eligible")
+	}
+}

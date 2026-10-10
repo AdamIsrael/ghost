@@ -3,6 +3,7 @@
     "nodes": [
       {
         "number": 42,
+        "state": "OPEN",
         "title": "Add retries to fetcher",
         "url": "https://github.com/o/r/pull/42",
         "body": "Retries transient errors.",

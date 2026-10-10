@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/AdamIsrael/ghost/internal/github"
@@ -225,9 +226,24 @@ func (s *Store) TransitionApproval(id int64, from, to string) (bool, error) {
 	return n == 1, err
 }
 
-// WaitingApprovals returns reviews whose approval waits on a PR change.
-func (s *Store) WaitingApprovals() ([]Review, error) {
-	rows, err := s.db.Query(`SELECT `+reviewCols+` FROM reviews r JOIN prs p ON p.id = r.pr_id WHERE r.approval = ?`, ApprovalWaiting)
+// ApprovalsFor returns the reviews of the given PRs whose approval is in one
+// of states.
+func (s *Store) ApprovalsFor(prs []github.PR, states ...string) ([]Review, error) {
+	if len(prs) == 0 || len(states) == 0 {
+		return nil, nil
+	}
+	var where []string
+	var args []any
+	for _, pr := range prs {
+		where = append(where, "(p.repo = ? AND p.number = ?)")
+		args = append(args, pr.Repo, pr.Number)
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?, ", len(states)), ", ")
+	for _, st := range states {
+		args = append(args, st)
+	}
+	rows, err := s.db.Query(`SELECT `+reviewCols+` FROM reviews r JOIN prs p ON p.id = r.pr_id
+		WHERE (`+strings.Join(where, " OR ")+`) AND r.approval IN (`+marks+`)`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -21,6 +21,7 @@ const SearchLimit = 50
 type PR struct {
 	Repo           string
 	Number         int
+	State          string // OPEN, CLOSED or MERGED
 	Title          string
 	URL            string
 	Author         string
@@ -68,7 +69,7 @@ const searchQuery = `query($q: String!, $first: Int!) {
   search(query: $q, type: ISSUE, first: $first) {
     nodes {
       ... on PullRequest {
-        number title url body isDraft updatedAt additions deletions changedFiles
+        number state title url body isDraft updatedAt additions deletions changedFiles
         baseRefName headRefName headRefOid reviewDecision
         author { login }
         repository { nameWithOwner }
@@ -86,6 +87,7 @@ type searchResponse struct {
 
 type prNode struct {
 	Number         int       `json:"number"`
+	State          string    `json:"state"`
 	Title          string    `json:"title"`
 	URL            string    `json:"url"`
 	Body           string    `json:"body"`
@@ -167,7 +169,7 @@ func (c *Client) SearchPRs(ctx context.Context, query string) ([]PR, error) {
 
 func toPR(n prNode) PR {
 	pr := PR{
-		Repo: n.Repository.NameWithOwner, Number: n.Number, Title: n.Title, URL: n.URL,
+		Repo: n.Repository.NameWithOwner, Number: n.Number, State: n.State, Title: n.Title, URL: n.URL,
 		Author: "ghost", Body: n.Body, BaseRef: n.BaseRefName, HeadRef: n.HeadRefName,
 		HeadSHA: n.HeadRefOid, IsDraft: n.IsDraft, ReviewDecision: n.ReviewDecision,
 		Additions: n.Additions, Deletions: n.Deletions, ChangedFiles: n.ChangedFiles,
@@ -191,7 +193,7 @@ type PRDetail struct {
 const prQuery = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      number title url body isDraft updatedAt additions deletions changedFiles
+      number state title url body isDraft updatedAt additions deletions changedFiles
       baseRefName headRefName headRefOid reviewDecision
       author { login }
       repository { nameWithOwner }
