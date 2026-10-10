@@ -240,3 +240,46 @@ func TestClaimNextConcurrentWithWrites(t *testing.T) {
 		t.Fatalf("claimed %d/%d, errors: %v", len(claimed), n, errs)
 	}
 }
+
+func TestApprovalFieldsRoundTrip(t *testing.T) {
+	s := openTest(t)
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	s.EnqueueReview(prID, "a", "claude", false)
+	r, _ := s.ClaimNext()
+	r.State, r.Approval, r.ApprovalNote = Posted, ApprovalWaiting, "CI is pending"
+	if err := s.SaveReview(r); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.LatestReview("o/r", 1)
+	if got.Approval != ApprovalWaiting || got.ApprovalNote != "CI is pending" {
+		t.Errorf("got %+v", got)
+	}
+	w, err := s.WaitingApprovals()
+	if err != nil || len(w) != 1 || w[0].ID != r.ID || w[0].Repo != "o/r" {
+		t.Fatalf("waiting = %+v, %v", w, err)
+	}
+	if ok, _ := s.TransitionApproval(r.ID, ApprovalWaiting, ApprovalApproving); !ok {
+		t.Fatal("transition failed")
+	}
+	if ok, _ := s.TransitionApproval(r.ID, ApprovalWaiting, ApprovalApproving); ok {
+		t.Error("second transition from a stale state must fail")
+	}
+	if w, _ := s.WaitingApprovals(); len(w) != 0 {
+		t.Errorf("no longer waiting, got %+v", w)
+	}
+}
+
+func TestFailInterruptedSettlesApproving(t *testing.T) {
+	s := openTest(t)
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	s.EnqueueReview(prID, "a", "claude", false)
+	r, _ := s.ClaimNext()
+	r.State, r.Approval = Posted, ApprovalApproving
+	s.SaveReview(r)
+	if _, err := s.FailInterrupted(1.5); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.LatestReview("o/r", 1); got.Approval != ApprovalUnknown || got.State != Posted {
+		t.Errorf("got %+v", got)
+	}
+}

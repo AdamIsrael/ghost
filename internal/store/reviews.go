@@ -23,27 +23,40 @@ const (
 	PostUnknown = "post-unknown"
 )
 
+// Approval states (Review.Approval). Empty means approval wasn't considered.
+const (
+	ApprovalWaiting   = "waiting"   // not yet: CI, draft or a human's requested changes
+	ApprovalPending   = "pending"   // qualifies; waiting for the operator (key a)
+	ApprovalApproving = "approving" // approval in flight
+	ApprovalApproved  = "approved"
+	ApprovalNo        = "not eligible" // final for this commit
+	ApprovalFailed    = "failed"       // GitHub refused (4xx), e.g. own PR
+	ApprovalUnknown   = "unknown"      // may have reached GitHub; check before retrying
+)
+
 // tsFormat is fixed-width UTC so timestamps sort as strings.
 const tsFormat = "2006-01-02T15:04:05.000000000Z"
 
 func ts(t time.Time) string { return t.UTC().Format(tsFormat) }
 
 type Review struct {
-	ID         int64
-	PRID       int64
-	Repo       string
-	Number     int
-	HeadSHA    string
-	Agent      string
-	State      string
-	Prompt     string
-	Verdict    string
-	Summary    string
-	Comments   string // JSON array of agent.InlineComment
-	Error      string
-	CostUSD    float64
-	CreatedAt  time.Time
-	FinishedAt time.Time // set once the review stops running
+	ID           int64
+	PRID         int64
+	Repo         string
+	Number       int
+	HeadSHA      string
+	Agent        string
+	State        string
+	Prompt       string
+	Verdict      string
+	Summary      string
+	Comments     string // JSON array of agent.InlineComment
+	Error        string
+	CostUSD      float64
+	Approval     string
+	ApprovalNote string
+	CreatedAt    time.Time
+	FinishedAt   time.Time // set once the review stops running
 }
 
 type AuditEvent struct {
@@ -88,13 +101,13 @@ func (s *Store) EnqueueReview(prID int64, headSHA, agentName string, force bool)
 }
 
 const reviewCols = `r.id, r.pr_id, p.repo, p.number, r.head_sha, r.agent, r.state, r.prompt, r.verdict,
-	r.summary, r.comments, r.error, r.cost_usd, r.created_at, COALESCE(r.finished_at, '')`
+	r.summary, r.comments, r.error, r.cost_usd, r.created_at, COALESCE(r.finished_at, ''), r.approval, r.approval_note`
 
 func scanReview(row interface{ Scan(...any) error }) (*Review, error) {
 	var r Review
 	var created, finished string
 	err := row.Scan(&r.ID, &r.PRID, &r.Repo, &r.Number, &r.HeadSHA, &r.Agent, &r.State, &r.Prompt, &r.Verdict,
-		&r.Summary, &r.Comments, &r.Error, &r.CostUSD, &created, &finished)
+		&r.Summary, &r.Comments, &r.Error, &r.CostUSD, &created, &finished, &r.Approval, &r.ApprovalNote)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -140,8 +153,8 @@ func (s *Store) SaveReview(r *Review) error {
 		r.Comments = "[]"
 	}
 	_, err := s.db.Exec(`UPDATE reviews SET state = ?, prompt = ?, verdict = ?, summary = ?, comments = ?,
-		error = ?, cost_usd = ?, finished_at = ? WHERE id = ?`,
-		r.State, r.Prompt, r.Verdict, r.Summary, r.Comments, r.Error, r.CostUSD, finished, r.ID)
+		error = ?, cost_usd = ?, finished_at = ?, approval = ?, approval_note = ? WHERE id = ?`,
+		r.State, r.Prompt, r.Verdict, r.Summary, r.Comments, r.Error, r.CostUSD, finished, r.Approval, r.ApprovalNote, r.ID)
 	return err
 }
 
@@ -195,7 +208,39 @@ func (s *Store) FailInterrupted(cap float64) ([]Review, error) {
 			return nil, err
 		}
 	}
+	if _, err := s.db.Exec(`UPDATE reviews SET approval = ? WHERE approval = ?`, ApprovalUnknown, ApprovalApproving); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// TransitionApproval moves a review's approval state only if it is still
+// from; it reports whether it did.
+func (s *Store) TransitionApproval(id int64, from, to string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE reviews SET approval = ? WHERE id = ? AND approval = ?`, to, id, from)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// WaitingApprovals returns reviews whose approval waits on a PR change.
+func (s *Store) WaitingApprovals() ([]Review, error) {
+	rows, err := s.db.Query(`SELECT `+reviewCols+` FROM reviews r JOIN prs p ON p.id = r.pr_id WHERE r.approval = ?`, ApprovalWaiting)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Review
+	for rows.Next() {
+		r, err := scanReview(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
 }
 
 // TransitionState moves a review from one state to another only if it is
