@@ -120,3 +120,31 @@ func TestBackoff(t *testing.T) {
 		}
 	}
 }
+
+type partialSearcher struct{}
+
+func (partialSearcher) SearchPRs(context.Context, string) ([]github.PR, error) {
+	return []github.PR{{Repo: "o/r", Number: 1}}, errors.New("1 PRs hidden: SAML")
+}
+
+func TestRunPassesPartialResultsThrough(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := New(partialSearcher{}, views[:1], time.Hour)
+	go p.Run(ctx)
+	r := next(t, p)
+	if len(r.PRs) != 1 || r.Err == nil {
+		t.Fatalf("want PRs and warning together, got %+v", r)
+	}
+}
+
+func TestPartialResultIsNotAFailedRound(t *testing.T) {
+	p := New(partialSearcher{}, views[:1], time.Hour)
+	go func() {
+		for range p.Results() {
+		}
+	}()
+	if p.pollAll(context.Background()) {
+		t.Error("a round that returned PRs should not count as failed (would trigger backoff)")
+	}
+}

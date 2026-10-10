@@ -3,6 +3,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -104,12 +105,41 @@ type prNode struct {
 	} `json:"commits"`
 }
 
+// PartialError reports PRs a search matched but GitHub would not return, for
+// example PRs in organizations that enforce SAML for the user's token.
+type PartialError struct {
+	Hidden int
+	Reason string
+}
+
+func (e *PartialError) Error() string {
+	return fmt.Sprintf("%d PRs hidden: %s", e.Hidden, e.Reason)
+}
+
+// partial converts a GraphQL error whose items all point at individual search
+// results into a PartialError. Any other error is not partial.
+func partial(err error) *PartialError {
+	var gqlErr *api.GraphQLError
+	if !errors.As(err, &gqlErr) || len(gqlErr.Errors) == 0 {
+		return nil
+	}
+	for _, item := range gqlErr.Errors {
+		if len(item.Path) < 3 || item.Path[0] != "search" || item.Path[1] != "nodes" {
+			return nil
+		}
+	}
+	return &PartialError{Hidden: len(gqlErr.Errors), Reason: gqlErr.Errors[0].Message}
+}
+
 // SearchPRs runs a GitHub search query and returns the matching pull requests.
-// Non-PR results (issues) are dropped.
+// Non-PR results (issues) are dropped. If GitHub withholds some results, the
+// visible PRs are returned along with a *PartialError.
 func (c *Client) SearchPRs(ctx context.Context, query string) ([]PR, error) {
 	var resp searchResponse
 	vars := map[string]interface{}{"q": query, "first": SearchLimit}
-	if err := c.gql.DoWithContext(ctx, searchQuery, vars, &resp); err != nil {
+	err := c.gql.DoWithContext(ctx, searchQuery, vars, &resp)
+	hidden := partial(err)
+	if err != nil && hidden == nil {
 		return nil, fmt.Errorf("search %q: %w", query, err)
 	}
 	prs := make([]PR, 0, len(resp.Search.Nodes))
@@ -131,6 +161,9 @@ func (c *Client) SearchPRs(ctx context.Context, query string) ([]PR, error) {
 			pr.CIState = n.Commits.Nodes[0].Commit.StatusCheckRollup.State
 		}
 		prs = append(prs, pr)
+	}
+	if hidden != nil {
+		return prs, hidden
 	}
 	return prs, nil
 }

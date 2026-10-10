@@ -8,17 +8,44 @@ import (
 	"io"
 	"os"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/cli/go-gh/v2/pkg/browser"
+
 	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/paths"
+	"github.com/AdamIsrael/ghost/internal/poller"
 	"github.com/AdamIsrael/ghost/internal/preflight"
 	"github.com/AdamIsrael/ghost/internal/store"
+	"github.com/AdamIsrael/ghost/internal/tui"
 )
 
-func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, preflight.ExecRunner))
+// deps are the side-effecting collaborators run needs; tests replace them.
+type deps struct {
+	runner      preflight.Runner
+	newSearcher func() (poller.Searcher, error)
+	runTUI      func(tea.Model) error
+	openURL     func(string) error
 }
 
-func run(args []string, stdout, stderr io.Writer, runner preflight.Runner) int {
+func defaultDeps() deps {
+	return deps{
+		runner:      preflight.ExecRunner,
+		newSearcher: func() (poller.Searcher, error) { return github.NewDefault() },
+		runTUI: func(m tea.Model) error {
+			_, err := tea.NewProgram(m).Run()
+			return err
+		},
+		// Discard browser launcher output so it can't corrupt the TUI.
+		openURL: browser.New("", io.Discard, io.Discard).Browse,
+	}
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, defaultDeps()))
+}
+
+func run(args []string, stdout, stderr io.Writer, d deps) int {
 	fs := flag.NewFlagSet("ghost", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
@@ -48,7 +75,7 @@ func run(args []string, stdout, stderr io.Writer, runner preflight.Runner) int {
 	case isInit:
 		return runInit(*cfgPath, stdout, stderr)
 	case *check:
-		return runCheck(*cfgPath, stdout, runner)
+		return runCheck(*cfgPath, stdout, d.runner)
 	}
 
 	cfg, err := config.Load(*cfgPath)
@@ -62,8 +89,26 @@ func run(args []string, stdout, stderr io.Writer, runner preflight.Runner) int {
 		return 1
 	}
 	defer st.Close()
-	fmt.Fprintf(stdout, "ghost: config OK (%d agents, %d views); database at %s. TUI arrives in M2.\n",
-		len(cfg.Agents), len(cfg.Views), *dbPath)
+
+	opts := tui.Options{
+		Views:           cfg.Views,
+		MaxDailyCostUSD: cfg.MaxDailyCostUSD,
+		Checks:          preflight.Run(context.Background(), d.runner),
+		OpenURL:         d.openURL,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if s, err := d.newSearcher(); err != nil {
+		opts.PollDisabled = "GitHub unavailable: " + err.Error()
+	} else if len(cfg.Views) > 0 {
+		p := poller.New(s, cfg.Views, cfg.PollInterval.Duration)
+		go p.Run(ctx)
+		opts.Results, opts.PollNow = p.Results(), p.PollNow
+	}
+	if err := d.runTUI(tui.New(opts)); err != nil {
+		fmt.Fprintln(stderr, "ghost:", err)
+		return 1
+	}
 	return 0
 }
 

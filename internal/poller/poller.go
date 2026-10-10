@@ -13,8 +13,8 @@ type Searcher interface {
 	SearchPRs(ctx context.Context, query string) ([]github.PR, error)
 }
 
-// Result is one view's poll outcome. On error PRs is nil and the caller keeps
-// whatever it showed before.
+// Result is one view's poll outcome. Err with nil PRs is a failed poll and the
+// caller keeps whatever it showed before; Err with PRs is a warning.
 type Result struct {
 	View string
 	PRs  []github.PR
@@ -82,7 +82,9 @@ func (p *Poller) pollAll(ctx context.Context) (failed bool) {
 		if ctx.Err() != nil {
 			return failed
 		}
-		if err != nil {
+		// A result that still carried PRs (e.g. some hidden by SAML) is a
+		// warning, not a failure, so it does not trigger backoff.
+		if err != nil && prs == nil {
 			failed = true
 		}
 		select {

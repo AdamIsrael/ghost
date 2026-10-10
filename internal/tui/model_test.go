@@ -191,3 +191,12 @@ func TestUsesAltScreen(t *testing.T) {
 		t.Error("View should request the alternate screen")
 	}
 }
+
+func TestPartialResultShowsPRsAndWarning(t *testing.T) {
+	m := send(t, New(Options{Views: twoViews}), tea.WindowSizeMsg{Width: 160, Height: 15},
+		resultMsg(poller.Result{View: "Team", PRs: []github.PR{samplePR(1, "Visible")}, Err: errors.New("6 PRs hidden: SAML"), At: time.Now()}))
+	out := screen(m)
+	if !strings.Contains(out, "Visible") || !strings.Contains(out, "Team: 6 PRs hidden") {
+		t.Errorf("want visible PR and hidden-PR warning:\n%s", out)
+	}
+}

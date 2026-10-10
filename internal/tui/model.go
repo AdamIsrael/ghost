@@ -99,6 +99,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errs[msg.View] = msg.Err
 		} else {
 			delete(m.errs, msg.View)
+		}
+		// A failed poll (error, no PRs) keeps the last good results.
+		if msg.Err == nil || msg.PRs != nil {
 			// Non-nil marks the view as polled, so an empty result reads
 			// "no PRs match" instead of "Loading…".
 			prs := msg.PRs
