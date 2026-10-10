@@ -56,6 +56,7 @@ type Engine struct {
 	changes chan struct{}
 
 	rereviewMu sync.Mutex     // serializes Rereview's check-then-enqueue
+	viewsMu    sync.RWMutex   // guards cfg.Views
 	recheckMu  sync.Mutex     // one approval recheck at a time, off the Run loop
 	wg         sync.WaitGroup // workers and rechecks; Run waits for them
 
@@ -168,12 +169,21 @@ func (e *Engine) worker(ctx context.Context) {
 }
 
 func (e *Engine) view(name string) (config.View, bool) {
+	e.viewsMu.RLock()
+	defer e.viewsMu.RUnlock()
 	for _, v := range e.cfg.Views {
 		if v.Name == name {
 			return v, true
 		}
 	}
 	return config.View{}, false
+}
+
+// SetViews replaces the views the engine auto-reviews from.
+func (e *Engine) SetViews(views []config.View) {
+	e.viewsMu.Lock()
+	e.cfg.Views = append([]config.View(nil), views...)
+	e.viewsMu.Unlock()
 }
 
 func (e *Engine) enqueue(res poller.Result) {

@@ -3,6 +3,7 @@ package poller
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/AdamIsrael/ghost/internal/config"
@@ -24,6 +25,7 @@ type Result struct {
 
 type Poller struct {
 	searcher Searcher
+	mu       sync.Mutex // guards views
 	views    []config.View
 	interval time.Duration
 	results  chan Result
@@ -35,12 +37,20 @@ func New(s Searcher, views []config.View, interval time.Duration) *Poller {
 		searcher: s,
 		views:    views,
 		interval: interval,
-		results:  make(chan Result, len(views)),
+		results:  make(chan Result, 16),
 		trigger:  make(chan struct{}, 1),
 	}
 }
 
 func (p *Poller) Results() <-chan Result { return p.results }
+
+// SetViews replaces the views to poll and starts a new round now.
+func (p *Poller) SetViews(views []config.View) {
+	p.mu.Lock()
+	p.views = append([]config.View(nil), views...)
+	p.mu.Unlock()
+	p.PollNow()
+}
 
 // PollNow asks Run to start a new round immediately. It never blocks.
 func (p *Poller) PollNow() {
@@ -77,7 +87,10 @@ func (p *Poller) Run(ctx context.Context) {
 
 // pollAll queries each view in order and reports whether any query failed.
 func (p *Poller) pollAll(ctx context.Context) (failed bool) {
-	for _, v := range p.views {
+	p.mu.Lock()
+	views := p.views
+	p.mu.Unlock()
+	for _, v := range views {
 		prs, err := p.searcher.SearchPRs(ctx, v.Query)
 		if ctx.Err() != nil {
 			return failed

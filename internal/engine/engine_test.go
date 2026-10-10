@@ -425,3 +425,15 @@ func (h *harness) advance(d time.Duration) {
 	}
 	h.now = h.now.Add(d)
 }
+
+func TestEngineSetViews(t *testing.T) {
+	h := newHarness(t, nil)
+	h.start()
+	h.e.SetViews([]config.View{{Name: "Fresh", Query: "q", AutoReview: true}})
+	h.poll("Team", ghPR(1, "a")) // Team no longer exists
+	h.poll("Fresh", ghPR(2, "b"))
+	waitFor(t, "PR 2 reviewed", func() bool { return h.state(2) == store.Ready })
+	if h.state(1) != "" {
+		t.Error("a removed view must not auto-review")
+	}
+}

@@ -148,3 +148,23 @@ func TestPartialResultIsNotAFailedRound(t *testing.T) {
 		t.Error("a round that returned PRs should not count as failed (would trigger backoff)")
 	}
 }
+
+func TestSetViewsPollsNewViews(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := New(&fakeSearcher{}, nil, time.Hour) // starts with no views
+	go p.Run(ctx)
+	p.SetViews([]config.View{{Name: "C", Query: "qc"}})
+	if r := next(t, p); r.View != "C" {
+		t.Fatalf("after SetViews got %+v", r)
+	}
+	p.SetViews(views)
+	// Rounds already in flight may still report C; the new views must follow.
+	r := next(t, p)
+	for r.View == "C" {
+		r = next(t, p)
+	}
+	if b := next(t, p); r.View != "A" || b.View != "B" {
+		t.Fatalf("views = %s,%s", r.View, b.View)
+	}
+}
