@@ -148,3 +148,27 @@ func TestDividerUsesBorderRole(t *testing.T) {
 		t.Error("divider should use the border role")
 	}
 }
+
+func TestSelectedRowStatusUsesForeground(t *testing.T) {
+	plain := tokyo.renderRow(prWith("failing"), 80, false)
+	sel := tokyo.renderRow(prWith("failing"), 80, true)
+	if !strings.Contains(plain, fgSGR("#f7768e")) {
+		t.Fatal("unselected row should use the status color")
+	}
+	if strings.Contains(sel, fgSGR("#f7768e")) {
+		t.Error("selected row status must use the foreground: status colors aren't checked against the selection color")
+	}
+}
+
+func TestNoColorIgnoresUserMonoOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeUserTheme(t, dir, "mono", "success = \"#00ff00\"\n")
+	reg, err := theme.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Themes: reg, NoColor: true})
+	if !noColor(m.sty.success.GetForeground()) {
+		t.Error("NO_COLOR must mean no color, even if a user theme overrides mono")
+	}
+}

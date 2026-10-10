@@ -5,12 +5,13 @@ package theme
 
 import (
 	"embed"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -97,17 +98,32 @@ func Load(userDir string) (*Registry, error) {
 	if userDir == "" {
 		return r, nil
 	}
-	paths, err := filepath.Glob(filepath.Join(userDir, "*.toml"))
-	if err != nil {
-		return nil, err
+	entries, err := os.ReadDir(userDir) // sorted by name
+	if errors.Is(err, fs.ErrNotExist) {
+		return r, nil
 	}
-	sort.Strings(paths)
-	for _, path := range paths {
+	if err != nil {
+		return nil, fmt.Errorf("themes %s: %w", userDir, err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		// Skip editor/OS clutter (.#lock files, ._AppleDouble) and anything
+		// that isn't a regular file once symlinks are followed.
+		if strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".toml") {
+			continue
+		}
+		path := filepath.Join(userDir, name)
+		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".toml")
+		if !validID.MatchString(id) || id == "auto" {
+			return nil, fmt.Errorf("theme %s: %q can't be a theme name (\"auto\" is reserved; use letters, digits, - and _)", path, id)
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("theme %s: %w", path, err)
 		}
-		id := strings.TrimSuffix(filepath.Base(path), ".toml")
 		p, err := parse(id, path, data)
 		if err != nil {
 			return nil, err
@@ -145,7 +161,10 @@ func parse(id, source string, data []byte) (Palette, error) {
 	return p, nil
 }
 
-var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+var (
+	hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+	validID  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+)
 
 func checkColor(c string) error {
 	if c == "" || hexColor.MatchString(c) {

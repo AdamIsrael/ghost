@@ -65,7 +65,9 @@ func (sty styles) renderRow(pr github.PR, width int, sel bool) string {
 	head := fmt.Sprintf("%s %-17s", st.Icon(), st)
 	headStyle, restStyle := sty.status(st), lipgloss.NewStyle()
 	if sel {
-		headStyle, restStyle = sty.onSelection(headStyle), sty.onSelection(restStyle)
+		// Status colors aren't contrast-checked against the selection color,
+		// so the selected row's status uses the foreground (bold) instead.
+		headStyle, restStyle = sty.onSelection(lipgloss.NewStyle().Bold(true)), sty.onSelection(restStyle)
 	}
 	hw := lipgloss.Width(head)
 	if width <= hw {

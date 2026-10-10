@@ -1,9 +1,9 @@
-# Published palette; adjusted for the readability rule: on_accent → #000000.
+# Published palette; foreground is base1 and muted base0 (base01 is too dim for text), border is base01 so the divider shows, on_accent → #000000.
 name = "Solarized Dark"
 background = "#002b36"
 foreground = "#93a1a1"
 muted = "#839496"
-border = "#073642"
+border = "#586e75"
 accent = "#268bd2"
 on_accent = "#000000"
 heading = "#268bd2"

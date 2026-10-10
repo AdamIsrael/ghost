@@ -119,3 +119,42 @@ func TestReadabilityProblemsFlagsDimMuted(t *testing.T) {
 		t.Error("themes without a background use the terminal's and are not checked")
 	}
 }
+
+func TestStrayFilesInThemesDirAreIgnored(t *testing.T) {
+	dir := t.TempDir()
+	writeTheme(t, dir, "good", "accent = \"5\"\n")
+	os.Symlink(filepath.Join(dir, "nowhere"), filepath.Join(dir, ".#good.toml")) // emacs lock file
+	os.WriteFile(filepath.Join(dir, "._good.toml"), []byte{0, 1, 2}, 0o644)      // macOS AppleDouble
+	os.Mkdir(filepath.Join(dir, "folder.toml"), 0o755)
+	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0o644)
+	r, err := Load(dir)
+	if err != nil {
+		t.Fatalf("stray files must not break loading: %v", err)
+	}
+	if _, ok := r.Get("good"); !ok || len(r.IDs()) != len(BuiltinOrder)+1 {
+		t.Errorf("ids = %v", r.IDs())
+	}
+}
+
+func TestThemesDirWithGlobCharacters(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "we[ird")
+	os.Mkdir(dir, 0o755)
+	writeTheme(t, dir, "mine", "")
+	r, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.Get("mine"); !ok {
+		t.Error("theme in a dir with glob characters not found")
+	}
+}
+
+func TestReservedAndOddThemeIDs(t *testing.T) {
+	for _, id := range []string{"auto", "my theme", "quote\"d"} {
+		dir := t.TempDir()
+		writeTheme(t, dir, id, "")
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), id) {
+			t.Errorf("%q: err = %v", id, err)
+		}
+	}
+}

@@ -114,8 +114,8 @@ func New(o Options) Model {
 // theme, or dark.
 func resolvePalette(o Options, themes *theme.Registry) (theme.Palette, bool) {
 	if o.NoColor {
-		p, _ := themes.Get("mono")
-		return p, false
+		// Literal, not themes.Get: a user mono.toml must not bring color back.
+		return theme.Palette{ID: "mono", Name: "Mono"}, false
 	}
 	if o.Theme == "auto" {
 		return theme.Palette{ID: "auto", Name: "Auto"}, true

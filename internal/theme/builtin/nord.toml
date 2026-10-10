@@ -1,4 +1,4 @@
-# Published palette.
+# Published palette; muted is a lightened nord3 (#a3abba) so hints meet the readability rule.
 name = "Nord"
 background = "#2e3440"
 foreground = "#d8dee9"
