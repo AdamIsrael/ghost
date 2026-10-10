@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/AdamIsrael/ghost/internal/run"
 )
@@ -35,6 +36,33 @@ func (m *Manager) repoLock(repo string) *sync.Mutex {
 		m.locks[repo] = l
 	}
 	return l
+}
+
+// lockRepo serializes work on one repo's bare clone across goroutines (mutex)
+// and across ghost processes (flock on <root>/repos/<repo>.lock).
+func (m *Manager) lockRepo(repo string) (func(), error) {
+	mu := m.repoLock(repo)
+	mu.Lock()
+	path := filepath.Join(m.root, "repos", repo+".lock")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		mu.Unlock()
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		mu.Unlock()
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		mu.Unlock()
+		return nil, err
+	}
+	return func() {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+		mu.Unlock()
+	}, nil
 }
 
 func (m *Manager) git(ctx context.Context, dir string, args ...string) error {
@@ -70,14 +98,16 @@ func (m *Manager) Checkout(ctx context.Context, repo string, number int, baseRef
 	}
 	bare := filepath.Join(m.root, "repos", repo+".git")
 
-	lock := m.repoLock(repo)
-	lock.Lock()
-	err := m.prepare(ctx, repo, bare, number, baseRef)
+	unlock, err := m.lockRepo(repo)
+	if err != nil {
+		return Workspace{}, noop, err
+	}
+	err = m.prepare(ctx, repo, bare, number, baseRef)
 	var ws Workspace
 	if err == nil {
 		ws.Dir, err = m.addWorktree(ctx, bare, headSHA)
 	}
-	lock.Unlock()
+	unlock()
 	if err != nil {
 		return Workspace{}, noop, err
 	}
@@ -88,9 +118,9 @@ func (m *Manager) Checkout(ctx context.Context, repo string, number int, baseRef
 			if ws.ContextDir != "" {
 				os.RemoveAll(ws.ContextDir)
 			}
-			l := m.repoLock(repo)
-			l.Lock()
-			defer l.Unlock()
+			if unlock, err := m.lockRepo(repo); err == nil {
+				defer unlock()
+			}
 			if m.git(context.Background(), bare, "worktree", "remove", "--force", ws.Dir) != nil {
 				os.RemoveAll(ws.Dir)
 				m.git(context.Background(), bare, "worktree", "prune")

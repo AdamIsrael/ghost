@@ -206,3 +206,36 @@ func TestReviewContextDisablesDiffDrivers(t *testing.T) {
 		t.Errorf("git diff must disable external diff drivers and textconv: %v", diffArgs)
 	}
 }
+
+func TestConcurrentCheckoutsAcrossManagers(t *testing.T) {
+	// Two Managers share nothing in memory, like two ghost processes.
+	rdir, head := remote(t)
+	var clones int32
+	root := t.TempDir()
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		m := New(root, fakeGh(rdir, &clones))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, cleanup, err := m.Checkout(context.Background(), "o/r", 7, "main", head)
+			if err != nil {
+				errs <- err
+				return
+			}
+			cleanup()
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if clones != 1 {
+		t.Errorf("cloned %d times across managers, want 1", clones)
+	}
+	if _, err := os.Stat(filepath.Join(root, "repos", "o", "r.lock")); err != nil {
+		t.Errorf("lock file missing: %v", err)
+	}
+}

@@ -147,3 +147,15 @@ func TestClaudeOmitsOptionalFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeUnreadableOutputCountsTheCap(t *testing.T) {
+	_, f := fakeClaude(t, "claude_test.go", errors.New("signal: killed"))
+	r, _ := New("claude", config.Agent{Kind: "claude"}, f)
+	res, err := r.Review(context.Background(), ReviewRequest{Dir: "/wt", Prompt: "p", MaxCostUSD: 1.5})
+	if err == nil || !strings.Contains(err.Error(), "cost unknown") {
+		t.Fatalf("want cost-unknown error, got %v", err)
+	}
+	if res.CostUSD != 1.5 {
+		t.Errorf("unknown cost should count as the cap, got %v", res.CostUSD)
+	}
+}

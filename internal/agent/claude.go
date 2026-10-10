@@ -68,7 +68,10 @@ func (c *claude) Review(ctx context.Context, req ReviewRequest) (ReviewResult, e
 
 	var out claudeOutput
 	if err := json.Unmarshal(stdout, &out); err != nil {
-		return res, fmt.Errorf("claude: unreadable output (%v): %w: %s", runErr, err, strings.TrimSpace(string(stderr)))
+		// No cost report: assume the worst so the daily budget stays safe.
+		res.CostUSD = req.MaxCostUSD
+		return res, fmt.Errorf("claude: unreadable output, cost unknown (counted as $%.2f) (%v): %w: %s",
+			req.MaxCostUSD, runErr, err, strings.TrimSpace(string(stderr)))
 	}
 	res.CostUSD = out.TotalCostUSD
 	if out.IsError || out.Subtype != "success" {
