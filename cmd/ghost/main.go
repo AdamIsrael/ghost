@@ -11,13 +11,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/cli/go-gh/v2/pkg/browser"
 
+	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/paths"
 	"github.com/AdamIsrael/ghost/internal/poller"
 	"github.com/AdamIsrael/ghost/internal/preflight"
+	subproc "github.com/AdamIsrael/ghost/internal/run"
 	"github.com/AdamIsrael/ghost/internal/store"
 	"github.com/AdamIsrael/ghost/internal/tui"
+	"github.com/AdamIsrael/ghost/internal/workspace"
 )
 
 // deps are the side-effecting collaborators run needs; tests replace them.
@@ -26,6 +29,9 @@ type deps struct {
 	newSearcher func() (poller.Searcher, error)
 	runTUI      func(tea.Model) error
 	openURL     func(string) error
+	getPR       func(ctx context.Context, repo string, number int) (github.PRDetail, error)
+	checkout    func(ctx context.Context, repo string, number int, baseRef, headSHA string) (string, func(), error)
+	newReviewer func(name string, a config.Agent) (agent.Reviewer, error)
 }
 
 func defaultDeps() deps {
@@ -38,6 +44,17 @@ func defaultDeps() deps {
 		},
 		// Discard browser launcher output so it can't corrupt the TUI.
 		openURL: browser.New("", io.Discard, io.Discard).Browse,
+		getPR: func(ctx context.Context, repo string, number int) (github.PRDetail, error) {
+			c, err := github.NewDefault()
+			if err != nil {
+				return github.PRDetail{}, err
+			}
+			return c.GetPR(ctx, repo, number)
+		},
+		checkout: workspace.New(paths.CacheDir(), subproc.Exec).Checkout,
+		newReviewer: func(name string, a config.Agent) (agent.Reviewer, error) {
+			return agent.New(name, a, subproc.Exec)
+		},
 	}
 }
 
@@ -49,7 +66,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 	fs := flag.NewFlagSet("ghost", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: ghost [flags] [init]")
+		fmt.Fprintln(stderr, "usage: ghost [flags] [init | review <pr> [--agent NAME] (--dry-run | --show-prompt)]")
 		fs.PrintDefaults()
 	}
 	cfgPath := fs.String("config", paths.ConfigFile(), "path to config.toml")
@@ -64,6 +81,13 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		if err := fs.Parse(fs.Args()[1:]); err != nil {
 			return 2
 		}
+	}
+	if fs.Arg(0) == "review" {
+		if *check {
+			fs.Usage()
+			return 2
+		}
+		return runReview(paths.ExpandHome(*cfgPath), fs.Args()[1:], stdout, stderr, d)
 	}
 	if fs.NArg() > 0 || (isInit && *check) {
 		fs.Usage()

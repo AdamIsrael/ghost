@@ -179,3 +179,15 @@ func TestStartWithoutGitHub(t *testing.T) {
 		t.Error("TUI should still open when GitHub is unavailable")
 	}
 }
+
+func appendFile(t *testing.T, path, s string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(s); err != nil {
+		t.Fatal(err)
+	}
+}
