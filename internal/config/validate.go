@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/AdamIsrael/ghost/internal/paths"
@@ -72,7 +73,11 @@ func (c *Config) Validate() error {
 			add("agents.%s: %w", name, err)
 			continue
 		}
-		if _, err := RenderPrompt(text, PromptData{}); err != nil {
+		if strings.TrimSpace(text) == "" {
+			add("agents.%s: prompt is empty", name)
+			continue
+		}
+		if _, err := RenderPrompt(text, sampleData); err != nil {
 			add("agents.%s prompt: %w", name, err)
 		}
 	}

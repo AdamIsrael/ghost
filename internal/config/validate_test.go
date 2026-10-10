@@ -132,3 +132,31 @@ func TestLoadValidates(t *testing.T) {
 		t.Fatalf("Load should validate, got %v", err)
 	}
 }
+
+func TestRenderPromptJoin(t *testing.T) {
+	out, err := RenderPrompt(`{{join .ChangedFiles ", "}}`, PromptData{ChangedFiles: []string{"a.go", "b.go"}})
+	if err != nil || out != "a.go, b.go" {
+		t.Fatalf("join = %q, %v", out, err)
+	}
+}
+
+func TestValidateAcceptsIndexIntoChangedFiles(t *testing.T) {
+	cfg := mustParse(t, "[agents.a]\nkind = \"claude\"\nprompt = \"first: {{index .ChangedFiles 0}}\"\n")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid template rejected: %v", err)
+	}
+}
+
+func TestValidateRejectsEmptyPrompt(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "empty.md"), []byte("  \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[agents.a]\nkind = \"claude\"\nprompt_file = \"empty.md\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(cfgPath); err == nil || !strings.Contains(err.Error(), "prompt is empty") {
+		t.Fatalf("want empty prompt error, got %v", err)
+	}
+}
