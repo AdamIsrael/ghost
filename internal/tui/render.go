@@ -65,7 +65,7 @@ func renderFilterBar(views []config.View, active int, counts map[string]int, wid
 		}
 		parts = append(parts, label)
 	}
-	return fit(strings.Join(parts, " ")+"  "+dim.Render("←/→ switch · o open · r review · P post · p pause · R refresh · q quit"), width)
+	return fit(strings.Join(parts, " ")+"  "+dim.Render("←/→ switch · o open · r review · P post · a approve · p pause · R refresh · q quit"), width)
 }
 
 func renderRow(pr github.PR, width int, sel bool) string {
@@ -214,5 +214,29 @@ func reviewLines(st engine.PRState, width int) []string {
 	case store.Blocked:
 		ls = append(ls, "", errText.Render("── Review blocked; it will not be posted ──"), cleanLine(r.Error))
 	}
+	if line := approvalLine(r); line != "" {
+		ls = append(ls, "", line)
+	}
 	return ls
+}
+
+func approvalLine(r *store.Review) string {
+	note := cleanLine(r.ApprovalNote)
+	switch r.Approval {
+	case store.ApprovalPending:
+		return bold.Render("── Approval pending: meets the auto-approve rules (press a to approve) ──")
+	case store.ApprovalWaiting:
+		return "Approval waiting: " + note
+	case store.ApprovalApproving:
+		return "Approving…"
+	case store.ApprovalApproved:
+		return bold.Render("✓ Approved")
+	case store.ApprovalNo:
+		return dim.Render("Not approved: " + note)
+	case store.ApprovalFailed:
+		return errText.Render("Approval failed: " + note)
+	case store.ApprovalUnknown:
+		return errText.Render("Approval result unknown; press a to check GitHub and retry")
+	}
+	return ""
 }

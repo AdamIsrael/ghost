@@ -25,6 +25,12 @@ type fakeEngine struct {
 	postErr  error
 	paused   bool
 	changes  chan struct{}
+	approved []string
+}
+
+func (f *fakeEngine) Approve(_ context.Context, repo string, n int) error {
+	f.approved = append(f.approved, repo)
+	return nil
 }
 
 func (f *fakeEngine) HandlePoll(r poller.Result)         { f.polls = append(f.polls, r) }
@@ -165,5 +171,31 @@ func TestDetailShowsPostUnknown(t *testing.T) {
 	fe := &fakeEngine{state: engine.PRState{Latest: &store.Review{State: store.PostUnknown, Summary: "S"}}}
 	if out := screen(withEngine(t, fe)); !strings.Contains(out, "Post result unknown") {
 		t.Errorf("post-unknown not shown:\n%s", out)
+	}
+}
+
+func TestApproveKey(t *testing.T) {
+	fe := &fakeEngine{}
+	m := withEngine(t, fe)
+	m, cmd := m.Update(key("a"))
+	runCmd(m, cmd)
+	if len(fe.approved) != 1 {
+		t.Errorf("a: approved = %v", fe.approved)
+	}
+}
+
+func TestDetailShowsApprovalState(t *testing.T) {
+	for state, want := range map[string]string{
+		store.ApprovalPending:  "press a to approve",
+		store.ApprovalWaiting:  "Approval waiting: CI is pending",
+		store.ApprovalApproved: "Approved",
+		store.ApprovalNo:       "Not approved: CI is pending",
+		store.ApprovalFailed:   "Approval failed: CI is pending",
+		store.ApprovalUnknown:  "press a to check GitHub",
+	} {
+		fe := &fakeEngine{state: engine.PRState{Latest: &store.Review{State: store.Posted, Approval: state, ApprovalNote: "CI is pending"}}}
+		if out := screen(withEngine(t, fe)); !strings.Contains(out, want) {
+			t.Errorf("%s: missing %q:\n%s", state, want, out)
+		}
 	}
 }

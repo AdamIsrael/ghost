@@ -38,6 +38,7 @@ type Engine interface {
 	PostPending(ctx context.Context, repo string, number int) error
 	TogglePause() bool
 	Changes() <-chan struct{}
+	Approve(ctx context.Context, repo string, number int) error
 }
 
 type Model struct {
@@ -214,6 +215,15 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 	case "p":
 		if m.opts.Engine != nil {
 			m.opts.Engine.TogglePause()
+		}
+	case "a":
+		pr := m.selectedPR()
+		if pr == nil || m.opts.Engine == nil {
+			return m, nil
+		}
+		e, repo, n := m.opts.Engine, pr.Repo, pr.Number
+		return m, func() tea.Msg {
+			return engineDoneMsg{"approve", e.Approve(context.Background(), repo, n)}
 		}
 	case "o", "enter":
 		pr := m.selectedPR()
