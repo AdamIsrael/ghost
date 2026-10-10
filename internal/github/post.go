@@ -113,3 +113,28 @@ func foldComments(cs []ReviewComment) string {
 	}
 	return b.String()
 }
+
+// HasReview reports whether one of the PR's reviews (first 100) contains
+// marker. Ghost uses it to avoid re-posting a review whose post timed out.
+func (c *Client) HasReview(ctx context.Context, repo string, number int, marker string) (bool, error) {
+	var reviews []struct {
+		Body string `json:"body"`
+	}
+	path := fmt.Sprintf("repos/%s/pulls/%d/reviews?per_page=100", repo, number)
+	if err := c.rest.DoWithContext(ctx, "GET", path, nil, &reviews); err != nil {
+		return false, fmt.Errorf("list reviews: %w", err)
+	}
+	for _, r := range reviews {
+		if strings.Contains(r.Body, marker) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// IsClientError reports a definite 4xx rejection: the request did not take
+// effect. Anything else (5xx, timeout, network) may have reached GitHub.
+func IsClientError(err error) bool {
+	var h *api.HTTPError
+	return errors.As(err, &h) && h.StatusCode >= 400 && h.StatusCode < 500
+}

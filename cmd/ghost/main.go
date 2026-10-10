@@ -34,6 +34,7 @@ type deps struct {
 	checkout    func(ctx context.Context, repo string, number int, baseRef, headSHA string) (workspace.Workspace, func(), error)
 	newReviewer func(name string, a config.Agent) (agent.Reviewer, error)
 	postReview  func(ctx context.Context, repo string, number int, p github.ReviewPost) (github.PostResult, error)
+	hasReview   func(ctx context.Context, repo string, number int, marker string) (bool, error)
 }
 
 func defaultDeps() deps {
@@ -63,6 +64,13 @@ func defaultDeps() deps {
 				return github.PostResult{}, err
 			}
 			return c.PostReview(ctx, repo, number, p)
+		},
+		hasReview: func(ctx context.Context, repo string, number int, marker string) (bool, error) {
+			c, err := github.NewDefault()
+			if err != nil {
+				return false, err
+			}
+			return c.HasReview(ctx, repo, number, marker)
 		},
 	}
 }
@@ -132,7 +140,8 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	eng := engine.New(cfg, engine.Deps{
-		Store: st, GetPR: d.getPR, Checkout: d.checkout, NewReviewer: d.newReviewer, PostReview: d.postReview,
+		Store: st, GetPR: d.getPR, Checkout: d.checkout, NewReviewer: d.newReviewer,
+		PostReview: d.postReview, HasReview: d.hasReview,
 	})
 	go eng.Run(ctx)
 	opts.Engine = eng

@@ -7,14 +7,16 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db   *sql.DB
+	now  func() time.Time
+	lock *os.File
 }
 
 // migrations are applied in order; PRAGMA user_version records how many ran.
@@ -68,8 +70,18 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
+	// One ghost per database: the engine's budget and claims live in memory.
+	lock, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("another ghost is already running with %s", path)
+	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
+		lock.Close()
 		return nil, err
 	}
 	f.Close()
@@ -80,17 +92,23 @@ func Open(path string) (*Store, error) {
 	}
 	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
+		lock.Close()
 		return nil, err
 	}
-	s := &Store{db: db, now: time.Now}
+	s := &Store{db: db, now: time.Now, lock: lock}
 	if err := s.migrate(); err != nil {
-		db.Close()
+		s.Close()
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+// Close closes the database and releases the single-instance lock.
+func (s *Store) Close() error {
+	err := s.db.Close()
+	s.lock.Close() // closing the descriptor releases the flock
+	return err
+}
 
 func (s *Store) SchemaVersion() (int, error) {
 	var v int

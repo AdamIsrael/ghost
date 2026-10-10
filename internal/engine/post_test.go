@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/cli/go-gh/v2/pkg/api"
 
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/github"
@@ -23,7 +26,7 @@ func TestPostPending(t *testing.T) {
 		t.Fatalf("state %s posts %d", h.state(1), h.postCount())
 	}
 	p := h.posts[0]
-	if p.CommitID != "sha1" || p.Event != "REQUEST_CHANGES" || !strings.HasPrefix(p.Body, "Needs a nil check.") || !strings.Contains(p.Body, "Automated review by Ghost") {
+	if p.CommitID != "sha1" || p.Event != "REQUEST_CHANGES" || !strings.HasPrefix(p.Body, "Needs a nil check.") || !strings.Contains(p.Body, "Automated review by Ghost") || !strings.Contains(p.Body, "<!-- ghost-review-id:") {
 		t.Errorf("post = %+v", p)
 	}
 	if len(p.Comments) != 1 || p.Comments[0].Path != "a.go" || p.Comments[0].Line != 3 || p.Comments[0].Body != "**Blocking:** nil deref" {
@@ -43,7 +46,9 @@ func TestPostPendingRequiresReadyReview(t *testing.T) {
 
 func TestPostFailureKeepsReady(t *testing.T) {
 	h := newHarness(t, nil)
-	h.postFn = func(github.ReviewPost) (github.PostResult, error) { return github.PostResult{}, errors.New("HTTP 502") }
+	h.postFn = func(github.ReviewPost) (github.PostResult, error) {
+		return github.PostResult{}, &api.HTTPError{StatusCode: 422, Message: "Validation Failed"}
+	}
 	h.start()
 	h.poll("Team", ghPR(1, "sha1"))
 	waitFor(t, "ready", func() bool { return h.state(1) == store.Ready })
@@ -123,5 +128,94 @@ func TestRereview(t *testing.T) {
 	}
 	if !found {
 		t.Error("audit missing re-review")
+	}
+}
+
+func TestPostPendingTwiceConcurrentlyPostsOnce(t *testing.T) {
+	h := newHarness(t, nil)
+	release := make(chan struct{})
+	h.postFn = func(github.ReviewPost) (github.PostResult, error) { <-release; return github.PostResult{}, nil }
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); errs[i] = h.e.PostPending(context.Background(), "o/r", 1) }(i)
+	}
+	waitFor(t, "one post in flight", func() bool { return h.postCount() == 1 })
+	close(release)
+	wg.Wait()
+	if h.postCount() != 1 || (errs[0] == nil) == (errs[1] == nil) {
+		t.Fatalf("posts %d errs %v", h.postCount(), errs)
+	}
+	if h.state(1) != store.Posted {
+		t.Errorf("state = %s", h.state(1))
+	}
+}
+
+func TestUncertainPostChecksGitHubBeforeRetry(t *testing.T) {
+	h := newHarness(t, nil)
+	h.postFn = func(github.ReviewPost) (github.PostResult, error) {
+		return github.PostResult{}, errors.New("context deadline exceeded")
+	}
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err == nil {
+		t.Fatal("want error")
+	}
+	if h.state(1) != store.PostUnknown {
+		t.Fatalf("transport error should leave the post unknown, got %s", h.state(1))
+	}
+	h.mu.Lock()
+	h.onGH = true // it did reach GitHub
+	h.postFn = nil
+	h.mu.Unlock()
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	if h.state(1) != store.Posted || h.postCount() != 1 {
+		t.Fatalf("must not re-post a review GitHub already has: state %s posts %d", h.state(1), h.postCount())
+	}
+}
+
+func TestUncertainPostRetriesWhenNotOnGitHub(t *testing.T) {
+	h := newHarness(t, nil)
+	h.postFn = func(github.ReviewPost) (github.PostResult, error) {
+		return github.PostResult{}, errors.New("connection reset")
+	}
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	h.e.PostPending(context.Background(), "o/r", 1)
+	h.mu.Lock()
+	h.postFn = nil
+	h.mu.Unlock()
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil || h.state(1) != store.Posted || h.postCount() != 2 {
+		t.Fatalf("err %v state %s posts %d", err, h.state(1), h.postCount())
+	}
+}
+
+func TestRereviewTwiceConcurrentlyQueuesOnce(t *testing.T) {
+	h := newHarness(t, nil)
+	h.e.TogglePause() // nothing runs; reviews stay queued
+	h.start()
+	var wg sync.WaitGroup
+	errs := make([]error, 4)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); errs[i] = h.e.Rereview(ghPR(1, "sha1")) }(i)
+	}
+	wg.Wait()
+	ok := 0
+	for _, err := range errs {
+		if err == nil {
+			ok++
+		}
+	}
+	if q, _ := h.st.CountState(store.Queued); ok != 1 || q != 1 {
+		t.Fatalf("successful rereviews %d, queued %d; want 1 and 1", ok, q)
 	}
 }

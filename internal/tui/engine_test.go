@@ -160,3 +160,10 @@ func TestInitWaitsForEngineChanges(t *testing.T) {
 		t.Error("no changeMsg from Init")
 	}
 }
+
+func TestDetailShowsPostUnknown(t *testing.T) {
+	fe := &fakeEngine{state: engine.PRState{Latest: &store.Review{State: store.PostUnknown, Summary: "S"}}}
+	if out := screen(withEngine(t, fe)); !strings.Contains(out, "Post result unknown") {
+		t.Errorf("post-unknown not shown:\n%s", out)
+	}
+}

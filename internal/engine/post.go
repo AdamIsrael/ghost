@@ -12,21 +12,56 @@ import (
 	"github.com/AdamIsrael/ghost/internal/store"
 )
 
-// PostPending posts a PR's finished review (state ready).
+// PostPending posts a PR's finished review (state ready), or retries one
+// whose earlier post may not have reached GitHub (state post-unknown).
 func (e *Engine) PostPending(ctx context.Context, repo string, number int) error {
 	r, err := e.d.Store.LatestReview(repo, number)
 	if err != nil {
 		return err
 	}
-	if r == nil || r.State != store.Ready {
+	if r == nil || (r.State != store.Ready && r.State != store.PostUnknown) {
 		return errors.New("no review is waiting to be posted")
 	}
 	return e.post(ctx, r)
 }
 
+func marker(id int64) string { return fmt.Sprintf("<!-- ghost-review-id:%d -->", id) }
+
+// post publishes r. It first claims the review (ready/post-unknown → posting)
+// so concurrent callers can't post it twice. A definite 4xx rejection returns
+// it to ready; any other failure leaves it post-unknown, and the next attempt
+// checks GitHub for its marker before posting again.
 func (e *Engine) post(ctx context.Context, r *store.Review) error {
+	from := r.State
+	ok, err := e.d.Store.TransitionState(r.ID, from, store.Posting)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("this review is already being posted")
+	}
+	r.State = store.Posting
+	e.notify()
+
+	if from == store.PostUnknown && e.d.HasReview != nil {
+		found, err := e.d.HasReview(ctx, r.Repo, r.Number, marker(r.ID))
+		if err != nil {
+			r.State = store.PostUnknown
+			e.save(r)
+			return err
+		}
+		if found {
+			r.State = store.Posted
+			e.save(r)
+			e.audit(r.PRID, r.ID, "posted", "found on GitHub from the earlier attempt; not posted again")
+			return nil
+		}
+	}
+
 	var comments []agent.InlineComment
 	if err := json.Unmarshal([]byte(r.Comments), &comments); err != nil {
+		r.State = from
+		e.save(r)
 		return err
 	}
 	// Re-check: the stored text is what gets posted.
@@ -39,7 +74,8 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 	p := github.ReviewPost{
 		CommitID: r.HeadSHA,
 		Event:    "COMMENT",
-		Body:     fmt.Sprintf("%s\n\n<sub>Automated review by Ghost · agent `%s` · commit %.7s</sub>", r.Summary, r.Agent, r.HeadSHA),
+		Body: fmt.Sprintf("%s\n\n<sub>Automated review by Ghost · agent `%s` · commit %.7s</sub>\n%s",
+			r.Summary, r.Agent, r.HeadSHA, marker(r.ID)),
 	}
 	if r.Verdict == string(agent.RequestChanges) {
 		p.Event = "REQUEST_CHANGES"
@@ -53,7 +89,15 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 	}
 	res, err := e.d.PostReview(ctx, r.Repo, r.Number, p)
 	if err != nil {
-		e.audit(r.PRID, r.ID, "post failed", err.Error())
+		if github.IsClientError(err) {
+			r.State = store.Ready
+			e.save(r)
+			e.audit(r.PRID, r.ID, "post failed", err.Error())
+		} else {
+			r.State = store.PostUnknown
+			e.save(r)
+			e.audit(r.PRID, r.ID, "post failed", err.Error()+"; it may have reached GitHub, so P checks before posting again")
+		}
 		return err
 	}
 	r.State = store.Posted
@@ -72,6 +116,8 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 // Rereview queues a fresh review of pr's head, using the PR's last agent (or
 // the default), unless one is already queued or running.
 func (e *Engine) Rereview(pr github.PR) error {
+	e.rereviewMu.Lock()
+	defer e.rereviewMu.Unlock()
 	latest, err := e.d.Store.LatestReview(pr.Repo, pr.Number)
 	if err != nil {
 		return err

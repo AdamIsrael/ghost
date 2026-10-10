@@ -25,6 +25,7 @@ type Deps struct {
 	Checkout    func(ctx context.Context, repo string, number int, baseRef, headSHA string) (workspace.Workspace, func(), error)
 	NewReviewer func(name string, a config.Agent) (agent.Reviewer, error)
 	PostReview  func(ctx context.Context, repo string, number int, p github.ReviewPost) (github.PostResult, error)
+	HasReview   func(ctx context.Context, repo string, number int, marker string) (bool, error)
 	Now         func() time.Time
 }
 
@@ -52,6 +53,8 @@ type Engine struct {
 	polls   chan poller.Result
 	wake    chan struct{}
 	changes chan struct{}
+
+	rereviewMu sync.Mutex // serializes Rereview's check-then-enqueue
 
 	mu           sync.Mutex
 	paused       bool
@@ -98,12 +101,17 @@ func (e *Engine) HandlePoll(r poller.Result) {
 	}
 }
 
-// Run requeues reviews interrupted by a previous exit, then processes poll
-// results and runs reviews until ctx is cancelled. Reviews still running at
-// cancellation stay "running" and are requeued on the next start.
+// Run settles reviews a previous process left in flight, then processes
+// poll results and runs reviews until ctx is cancelled.
 func (e *Engine) Run(ctx context.Context) {
-	if n, err := e.d.Store.ResetRunning(); err == nil && n > 0 {
-		e.notify()
+	if rs, err := e.d.Store.FailInterrupted(e.cfg.MaxCostPerReviewUSD); err == nil {
+		for _, r := range rs {
+			if r.State == store.Failed {
+				e.audit(r.PRID, r.ID, "interrupted", fmt.Sprintf("ghost exited while this review was running; charged $%.2f (cost unknown). Press r to retry", r.CostUSD))
+			} else {
+				e.audit(r.PRID, r.ID, "post unknown", "ghost exited while posting; P checks GitHub before posting again")
+			}
+		}
 	}
 	for i := 0; i < e.cfg.MaxConcurrentReviews; i++ {
 		go e.worker(ctx)
@@ -224,7 +232,13 @@ func (e *Engine) process(ctx context.Context, r *store.Review) {
 	e.notify()
 	if err := e.review(ctx, r); err != nil {
 		if ctx.Err() != nil {
-			return // shutting down: left running, requeued on next start
+			// Shutting down mid-run: the agent was killed without a cost
+			// report, so charge the cap and don't retry automatically.
+			r.State, r.Error = store.Failed, "interrupted: ghost exited while it was running"
+			r.CostUSD = max(r.CostUSD, e.cfg.MaxCostPerReviewUSD)
+			e.save(r)
+			e.audit(r.PRID, r.ID, "interrupted", fmt.Sprintf("charged $%.2f (cost unknown). Press r to retry", r.CostUSD))
+			return
 		}
 		r.State, r.Error = store.Failed, err.Error()
 		e.save(r)

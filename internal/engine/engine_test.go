@@ -51,6 +51,7 @@ type harness struct {
 	heads  map[int]string // PR number → current head SHA reported by GetPR
 	posts  []github.ReviewPost
 	postFn func(github.ReviewPost) (github.PostResult, error)
+	onGH   bool // what HasReview reports
 	cancel context.CancelFunc
 }
 
@@ -83,6 +84,11 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 			return workspace.Workspace{Dir: "/wt", ContextDir: "/ctx", DiffPath: "/ctx/diff.patch", CommitsPath: "/ctx/commits.txt"}, func() {}, nil
 		},
 		NewReviewer: func(string, config.Agent) (agent.Reviewer, error) { return h.rev, nil },
+		HasReview: func(_ context.Context, repo string, n int, marker string) (bool, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return h.onGH, nil
+		},
 		PostReview: func(_ context.Context, repo string, n int, p github.ReviewPost) (github.PostResult, error) {
 			h.mu.Lock()
 			h.posts = append(h.posts, p)
@@ -131,6 +137,12 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// waitAudit waits for an audit event kind; state is saved before its audit row.
+func (h *harness) waitAudit(t *testing.T, n int, kind string) {
+	t.Helper()
+	waitFor(t, "audit "+kind, func() bool { return strings.Contains(kinds(h.e.PRState("o/r", n).Audit), kind) })
+}
+
 func (h *harness) state(n int) string {
 	r, _ := h.st.LatestReview("o/r", n)
 	if r == nil {
@@ -151,7 +163,7 @@ func TestPollQueuesAndReviewsToReady(t *testing.T) {
 	h := newHarness(t, nil)
 	h.start()
 	h.poll("Team", ghPR(1, "sha1"))
-	waitFor(t, "ready", func() bool { return h.state(1) == store.Ready })
+	h.waitAudit(t, 1, "ready to post")
 
 	st := h.e.PRState("o/r", 1)
 	if got := kinds(st.Audit); got != "queued,started,reviewed,ready to post" {
@@ -233,7 +245,7 @@ func TestFailedReviewRecordsCostAndIsNotRetried(t *testing.T) {
 	h.rev.res = agent.ReviewResult{CostUSD: 1.51}
 	h.start()
 	h.poll("Team", ghPR(1, "a"))
-	waitFor(t, "failed", func() bool { return h.state(1) == store.Failed })
+	h.waitAudit(t, 1, "failed")
 	st := h.e.PRState("o/r", 1)
 	if st.Latest.CostUSD != 1.51 || !strings.Contains(st.Audit[len(st.Audit)-1].Message, "$1.51") {
 		t.Errorf("latest %+v audit %+v", st.Latest, st.Audit)
@@ -250,7 +262,7 @@ func TestSecretInReviewBlocksPosting(t *testing.T) {
 	h.rev.res.Summary = "Found token ghp_" + strings.Repeat("a", 36)
 	h.start()
 	h.poll("Team", ghPR(1, "a"))
-	waitFor(t, "blocked", func() bool { return h.state(1) == store.Blocked })
+	h.waitAudit(t, 1, "blocked")
 	st := h.e.PRState("o/r", 1)
 	if !strings.Contains(st.Latest.Error, "GitHub token") || !strings.Contains(kinds(st.Audit), "blocked") {
 		t.Errorf("latest %+v audit %s", st.Latest, kinds(st.Audit))
@@ -271,14 +283,35 @@ func TestSupersededHead(t *testing.T) {
 	}
 }
 
-func TestResetRunningOnStart(t *testing.T) {
+func TestInterruptedReviewIsChargedNotRequeued(t *testing.T) {
 	h := newHarness(t, nil)
 	prID, _ := h.st.UpsertPR(ghPR(1, "a"))
 	h.st.EnqueueReview(prID, "a", "claude", false)
 	h.st.ClaimNext() // left "running" by a crashed process
 	h.heads[1] = "a"
 	h.start()
-	waitFor(t, "recovered review done", func() bool { return h.state(1) == store.Ready })
+	h.waitAudit(t, 1, "interrupted")
+	r, _ := h.st.LatestReview("o/r", 1)
+	if r.State != store.Failed || r.CostUSD != 1.5 || h.rev.count() != 0 {
+		t.Fatalf("review %+v calls %d", r, h.rev.count())
+	}
+	if h.e.Snapshot().SpendTodayUSD != 1.5 {
+		t.Error("interrupted run must count toward today's spend")
+	}
+}
+
+func TestShutdownMidReviewChargesCap(t *testing.T) {
+	h := newHarness(t, nil)
+	h.rev.release = make(chan struct{})
+	h.start()
+	h.poll("Team", ghPR(1, "a"))
+	waitFor(t, "running", func() bool { return h.rev.count() == 1 })
+	h.cancel()
+	waitFor(t, "failed", func() bool { return h.state(1) == store.Failed })
+	r, _ := h.st.LatestReview("o/r", 1)
+	if r.CostUSD != 1.5 || !strings.Contains(r.Error, "interrupted") {
+		t.Errorf("review = %+v", r)
+	}
 }
 
 func TestPauseStopsNewReviews(t *testing.T) {

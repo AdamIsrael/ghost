@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -17,15 +18,21 @@ type restCall struct {
 }
 
 type fakeREST struct {
-	calls []restCall
-	errs  []error // returned in order; nil when exhausted
+	calls   []restCall
+	errs    []error // returned in order; nil when exhausted
+	getBody string  // JSON returned for GET requests
 }
 
-func (f *fakeREST) DoWithContext(_ context.Context, method, path string, body io.Reader, _ interface{}) error {
+func (f *fakeREST) DoWithContext(_ context.Context, method, path string, body io.Reader, resp interface{}) error {
 	var p ReviewPost
-	data, _ := io.ReadAll(body)
-	json.Unmarshal(data, &p)
+	if body != nil {
+		data, _ := io.ReadAll(body)
+		json.Unmarshal(data, &p)
+	}
 	f.calls = append(f.calls, restCall{method, path, p})
+	if method == "GET" && resp != nil {
+		json.Unmarshal([]byte(f.getBody), resp)
+	}
 	if len(f.errs) == 0 {
 		return nil
 	}
@@ -118,5 +125,31 @@ func TestPostReviewOwnPRMessageInMessageField(t *testing.T) {
 	res, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, samplePost())
 	if err != nil || !res.Downgraded || res.Folded {
 		t.Fatalf("res %+v err %v", res, err)
+	}
+}
+
+func TestHasReview(t *testing.T) {
+	f := &fakeREST{getBody: `[{"body":"other"},{"body":"Summary\n<!-- ghost-review-id:42 -->"}]`}
+	c := New(nil).WithREST(f)
+	found, err := c.HasReview(context.Background(), "o/r", 7, "<!-- ghost-review-id:42 -->")
+	if err != nil || !found {
+		t.Fatalf("found %v err %v", found, err)
+	}
+	if f.calls[0].method != "GET" || f.calls[0].path != "repos/o/r/pulls/7/reviews?per_page=100" {
+		t.Errorf("call = %+v", f.calls[0])
+	}
+	if found, _ := c.HasReview(context.Background(), "o/r", 7, "<!-- ghost-review-id:7 -->"); found {
+		t.Error("unexpected match")
+	}
+}
+
+func TestIsClientError(t *testing.T) {
+	if !IsClientError(fmt.Errorf("post review: %w", &api.HTTPError{StatusCode: 422})) {
+		t.Error("422 is a client error")
+	}
+	for _, err := range []error{&api.HTTPError{StatusCode: 502}, errors.New("timeout"), context.DeadlineExceeded} {
+		if IsClientError(err) {
+			t.Errorf("%v must not count as a definite client error", err)
+		}
 	}
 }

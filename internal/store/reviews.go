@@ -16,6 +16,11 @@ const (
 	Posted  = "posted"
 	Blocked = "blocked" // never posted: possible secret in output
 	Failed  = "failed"
+	// Posting is held while a post is in flight, so only one caller posts.
+	Posting = "posting"
+	// PostUnknown: the post may or may not have reached GitHub (timeout,
+	// 5xx, or exit mid-post). Posting again first checks GitHub.
+	PostUnknown = "post-unknown"
 )
 
 // tsFormat is fixed-width UTC so timestamps sort as strings.
@@ -160,13 +165,49 @@ func (s *Store) SpendSince(t time.Time) (float64, error) {
 	return sum, err
 }
 
-// ResetRunning requeues reviews left running by a previous process.
-func (s *Store) ResetRunning() (int64, error) {
-	res, err := s.db.Exec(`UPDATE reviews SET state = ? WHERE state = ?`, Queued, Running)
+// FailInterrupted settles reviews a previous process left in flight. A
+// running review may have spent money with no cost report, so it fails and is
+// charged cap (it is not retried automatically); a posting one becomes
+// PostUnknown. It returns the affected reviews.
+func (s *Store) FailInterrupted(cap float64) ([]Review, error) {
+	rows, err := s.db.Query(`SELECT `+reviewCols+` FROM reviews r JOIN prs p ON p.id = r.pr_id WHERE r.state IN (?, ?)`, Running, Posting)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return res.RowsAffected()
+	var out []Review
+	for rows.Next() {
+		r, err := scanReview(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	rows.Close()
+	for i := range out {
+		r := &out[i]
+		if r.State == Running {
+			r.State, r.Error = Failed, "interrupted: ghost exited while it was running"
+			r.CostUSD = max(r.CostUSD, cap)
+		} else {
+			r.State = PostUnknown
+		}
+		if err := s.SaveReview(r); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// TransitionState moves a review from one state to another only if it is
+// still in from; it reports whether it did.
+func (s *Store) TransitionState(id int64, from, to string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE reviews SET state = ? WHERE id = ? AND state = ?`, to, id, from)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 func (s *Store) AddAudit(prID, reviewID int64, kind, msg string) error {

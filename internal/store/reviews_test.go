@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,17 +125,61 @@ func TestSpendSinceUsesFinishedAt(t *testing.T) {
 	}
 }
 
-func TestResetRunning(t *testing.T) {
+func TestFailInterrupted(t *testing.T) {
+	s := openTest(t)
+	p1, _ := s.UpsertPR(pr(1, "a"))
+	p2, _ := s.UpsertPR(pr(2, "b"))
+	s.EnqueueReview(p1, "a", "claude", false)
+	s.EnqueueReview(p2, "b", "claude", false)
+	r1, _ := s.ClaimNext() // left running by a crash
+	r2, _ := s.ClaimNext()
+	r2.State = Posting // crashed mid-post
+	s.SaveReview(r2)
+	if rs, err := s.FailInterrupted(1.5); len(rs) != 2 || err != nil {
+		t.Fatalf("FailInterrupted = %d, %v", len(rs), err)
+	}
+	got1, _ := s.LatestReview("o/r", 1)
+	if got1.State != Failed || got1.CostUSD != 1.5 || !strings.Contains(got1.Error, "interrupted") || got1.FinishedAt.IsZero() {
+		t.Errorf("running review = %+v", got1)
+	}
+	got2, _ := s.LatestReview("o/r", 2)
+	if got2.State != PostUnknown {
+		t.Errorf("posting review = %+v", got2)
+	}
+	if n, _ := s.CountState(Queued); n != 0 {
+		t.Errorf("interrupted reviews must not be requeued (queued=%d)", n)
+	}
+	_ = r1
+}
+
+func TestTransitionState(t *testing.T) {
 	s := openTest(t)
 	prID, _ := s.UpsertPR(pr(1, "a"))
 	s.EnqueueReview(prID, "a", "claude", false)
-	s.ClaimNext()
-	if n, err := s.ResetRunning(); n != 1 || err != nil {
-		t.Fatalf("reset = %d, %v", n, err)
+	r, _ := s.ClaimNext()
+	if ok, err := s.TransitionState(r.ID, Running, Ready); !ok || err != nil {
+		t.Fatalf("first transition: %v %v", ok, err)
 	}
-	if n, _ := s.CountState(Queued); n != 1 {
-		t.Errorf("queued = %d", n)
+	if ok, _ := s.TransitionState(r.ID, Running, Ready); ok {
+		t.Error("transition from a state the review is no longer in must fail")
 	}
+}
+
+func TestOpenRejectsSecondInstance(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "ghost.db")
+	s1, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(p); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("second Open = %v, want already-running error", err)
+	}
+	s1.Close()
+	s3, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open after Close: %v", err)
+	}
+	s3.Close()
 }
 
 func TestAuditOrderAndLimit(t *testing.T) {

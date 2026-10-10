@@ -206,6 +206,11 @@ func reviewLines(st engine.PRState, width int) []string {
 		for _, c := range st.Comments {
 			ls = append(ls, fmt.Sprintf("%s:%d [%s] %s", cleanLine(c.Path), c.Line, cleanLine(c.Severity), cleanLine(c.Body)))
 		}
+	case store.Posting:
+		ls = append(ls, "", bold.Render("── Posting… ──"))
+	case store.PostUnknown:
+		ls = append(ls, "", errText.Render("── Post result unknown; press P to check GitHub and retry ──"))
+		ls = append(ls, strings.Split(ansi.Wordwrap(clean(r.Summary), width, " "), "\n")...)
 	case store.Blocked:
 		ls = append(ls, "", errText.Render("── Review blocked; it will not be posted ──"), cleanLine(r.Error))
 	}
