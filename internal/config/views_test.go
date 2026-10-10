@@ -107,3 +107,33 @@ func TestSaveViewsAtomicLeavesNoTemp(t *testing.T) {
 		t.Errorf("dir = %v", entries)
 	}
 }
+
+func TestSaveViewsKeepsSymlinkAndMode(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "dotfiles", "views.toml")
+	os.MkdirAll(filepath.Dir(real), 0o755)
+	writeFile(t, real, "")
+	os.Chmod(real, 0o600)
+	link := filepath.Join(dir, "views.toml")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveViews(link, []View{{Name: "A", Query: "q"}}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink replaced by a file: %v %v", fi.Mode(), err)
+	}
+	if data, _ := os.ReadFile(real); !strings.Contains(string(data), `name = "A"`) {
+		t.Errorf("target not updated:\n%s", data)
+	}
+	if fi, _ := os.Stat(real); fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %o, want 600 kept", fi.Mode().Perm())
+	}
+}
+
+func TestViewsHeaderWarnsAboutRewrites(t *testing.T) {
+	if !strings.Contains(viewsHeader, "rewrites this file") {
+		t.Errorf("header should warn that TUI saves rewrite the file: %q", viewsHeader)
+	}
+}

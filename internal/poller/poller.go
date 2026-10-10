@@ -17,10 +17,11 @@ type Searcher interface {
 // Result is one view's poll outcome. Err with nil PRs is a failed poll and the
 // caller keeps whatever it showed before; Err with PRs is a warning.
 type Result struct {
-	View string
-	PRs  []github.PR
-	Err  error
-	At   time.Time
+	View  string
+	Query string // the query that produced this result
+	PRs   []github.PR
+	Err   error
+	At    time.Time
 }
 
 type Poller struct {
@@ -101,7 +102,7 @@ func (p *Poller) pollAll(ctx context.Context) (failed bool) {
 			failed = true
 		}
 		select {
-		case p.results <- Result{View: v.Name, PRs: prs, Err: err, At: time.Now()}:
+		case p.results <- Result{View: v.Name, Query: v.Query, PRs: prs, Err: err, At: time.Now()}:
 		case <-ctx.Done():
 			return failed
 		}

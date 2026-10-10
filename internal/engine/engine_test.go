@@ -437,3 +437,17 @@ func TestEngineSetViews(t *testing.T) {
 		t.Error("a removed view must not auto-review")
 	}
 }
+
+func TestResultFromOldQueryIgnored(t *testing.T) {
+	h := newHarness(t, nil)
+	h.start()
+	h.e.SetViews([]config.View{{Name: "Team", Query: "narrow", AutoReview: true}})
+	h.heads[1] = "a"
+	h.e.HandlePoll(poller.Result{View: "Team", Query: "q", PRs: []github.PR{ghPR(1, "a")}, At: time.Now()}) // in flight from before the edit
+	h.heads[2] = "b"
+	h.e.HandlePoll(poller.Result{View: "Team", Query: "narrow", PRs: []github.PR{ghPR(2, "b")}, At: time.Now()})
+	waitFor(t, "PR 2 reviewed", func() bool { return h.state(2) == store.Ready })
+	if h.state(1) != "" {
+		t.Error("a result from the view's old query must not queue paid reviews")
+	}
+}

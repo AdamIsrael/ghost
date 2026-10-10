@@ -147,3 +147,15 @@ func (f viewForm) render(width, height int) string {
 	ls = append(ls, dim.Render("tab next field · space toggle · ←/→ agent · enter save · esc cancel"))
 	return block(ls, width, height)
 }
+
+// paste inserts pasted text into the focused text field.
+func (f viewForm) paste(msg tea.PasteMsg) (viewForm, tea.Cmd) {
+	var cmd tea.Cmd
+	switch f.focus {
+	case fieldName:
+		f.name, cmd = f.name.Update(msg)
+	case fieldQuery:
+		f.query, cmd = f.query.Update(msg)
+	}
+	return f, cmd
+}

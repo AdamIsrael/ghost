@@ -59,7 +59,7 @@ func renderFilterBar(views []config.View, active int, counts map[string]int, wid
 		if n, ok := counts[v.Name]; ok {
 			count = fmt.Sprint(n)
 		}
-		label := fmt.Sprintf(" %s (%s) ", v.Name, count)
+		label := fmt.Sprintf(" %s (%s) ", cleanLine(v.Name), count)
 		if i == active {
 			label = activeTab.Render(label)
 		}

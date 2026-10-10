@@ -167,6 +167,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case resultMsg:
+		if v, ok := m.viewNamed(msg.View); ok && msg.Query != "" && msg.Query != v.Query {
+			// From before the view was edited; the new query's result follows.
+			return m, waitForResult(m.opts.Results)
+		}
 		if m.opts.Engine != nil {
 			m.opts.Engine.HandlePoll(poller.Result(msg))
 		}
@@ -202,6 +206,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = ""
 		if msg.err != nil {
 			m.flash = "open failed: " + msg.err.Error()
+		}
+	case tea.PasteMsg:
+		if m.form != nil {
+			f, cmd := m.form.paste(msg)
+			m.form = &f
+			return m, cmd
 		}
 	case tea.KeyPressMsg:
 		switch {
@@ -419,6 +429,9 @@ func (m Model) handleFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.views, m.form = views, nil
 		m.active, m.cursor = idx, 0
 		m.flash = ""
+		if v.AutoReview {
+			m.flash = fmt.Sprintf("saved %q; auto-review is on, so matching PRs will be reviewed (and charged) from now on", v.Name)
+		}
 		return m, nil
 	}
 	m.form = &f
@@ -447,4 +460,13 @@ func (m Model) handleConfirmKey(k string) (tea.Model, tea.Cmd) {
 	}
 	m.cursor = 0
 	return m, nil
+}
+
+func (m Model) viewNamed(name string) (config.View, bool) {
+	for _, v := range m.views {
+		if v.Name == name {
+			return v, true
+		}
+	}
+	return config.View{}, false
 }

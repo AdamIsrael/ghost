@@ -29,7 +29,13 @@ func WriteDefaults(configPath string) ([]string, error) {
 		{filepath.Join(dir, ViewsFileName), defaultViews},
 	}
 	var created []string
-	for _, f := range files {
+	for i, f := range files {
+		// The starter views.toml only comes with a brand-new config.toml: an
+		// existing install may already define that view, and a duplicate name
+		// would stop Ghost from starting.
+		if i == 2 && (len(created) == 0 || created[0] != configPath) {
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
 			return created, err
 		}

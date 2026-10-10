@@ -24,8 +24,9 @@ type viewsFile struct {
 	View []View `toml:"view"`
 }
 
-const viewsHeader = `# Views managed by Ghost. Edit them in the TUI (n new, e edit, d delete) or here.
-# Views can also be defined in config.toml; those are read-only in the TUI.
+const viewsHeader = `# Views managed by Ghost (TUI keys: n new, e edit, d delete). Saving from the TUI
+# rewrites this file, so comments are not kept; hand-edit only while Ghost is
+# stopped. Views can also be defined in config.toml; those are read-only in the TUI.
 
 `
 
@@ -56,8 +57,10 @@ func loadViewsFile(path string) ([]View, error) {
 	return vf.View, nil
 }
 
-// SaveViews replaces views.toml with views, atomically: it writes a temp
-// file in the same directory and renames it over the old one.
+// SaveViews replaces views.toml with views, atomically and durably: it
+// writes a synced temp file next to the real file and renames it over it.
+// A symlinked views.toml (dotfile managers) stays a symlink, and an existing
+// file keeps its permissions.
 func SaveViews(path string, views []View) error {
 	var b bytes.Buffer
 	b.WriteString(viewsHeader)
@@ -68,7 +71,15 @@ func SaveViews(path string, views []View) error {
 			return err
 		}
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".views-*.toml")
+	target := path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		target = resolved
+	}
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(target); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".views-*.toml")
 	if err != nil {
 		return err
 	}
@@ -77,11 +88,22 @@ func SaveViews(path string, views []View) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+	if err := os.Chmod(tmp.Name(), mode); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), target); err != nil {
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(target)); err == nil {
+		d.Sync() // persist the rename
+		d.Close()
+	}
+	return nil
 }

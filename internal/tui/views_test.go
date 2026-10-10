@@ -8,6 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/github"
+	"github.com/AdamIsrael/ghost/internal/poller"
 )
 
 type viewSaver struct {
@@ -141,5 +143,43 @@ func TestEditingUnavailableWithoutSaver(t *testing.T) {
 	m := send(t, New(Options{Views: managed}), tea.WindowSizeMsg{Width: 140, Height: 20}, key("n"))
 	if strings.Contains(screen(m), "New view") || !strings.Contains(screen(m), "unavailable") {
 		t.Fatalf("got:\n%s", screen(m))
+	}
+}
+
+func TestTUIIgnoresResultFromOldQuery(t *testing.T) {
+	m := send(t, New(Options{Views: []config.View{{Name: "Team", Query: "narrow"}}}), tea.WindowSizeMsg{Width: 140, Height: 20},
+		resultMsg(poller.Result{View: "Team", Query: "wide", PRs: []github.PR{samplePR(1, "Stale")}}))
+	if strings.Contains(screen(m), "Stale") {
+		t.Error("result from an old query shown")
+	}
+}
+
+func TestPasteIntoForm(t *testing.T) {
+	s := &viewSaver{}
+	m := sendKeys(viewsModel(t, s, managed), key("n"))
+	m, _ = m.Update(tea.PasteMsg{Content: "Pasted name"})
+	m = sendKeys(m, tab)
+	m, _ = m.Update(tea.PasteMsg{Content: "repo:o/r is:open"})
+	m = sendKeys(m, enter)
+	if len(s.saved) != 1 || s.saved[0][2].Name != "Pasted name" || s.saved[0][2].Query != "repo:o/r is:open" {
+		t.Fatalf("saved = %+v", s.saved)
+	}
+}
+
+func TestFilterBarSanitizesViewNames(t *testing.T) {
+	m := send(t, New(Options{Views: []config.View{{Name: "evil\x1b]52;c;eA==\x07", Query: "q"}}}), tea.WindowSizeMsg{Width: 140, Height: 10})
+	if raw := m.View().Content; strings.Contains(raw, "\x1b]52") || strings.Contains(raw, "\x07") {
+		t.Errorf("escape sequence from a view name reached the terminal: %q", raw)
+	}
+}
+
+func TestSavingAutoReviewViewWarnsAboutCost(t *testing.T) {
+	s := &viewSaver{}
+	m := sendKeys(viewsModel(t, s, managed), key("n"))
+	keys := append(typed("Auto"), tab)
+	keys = append(keys, typed("is:pr")...)
+	m = sendKeys(m, append(keys, tab, space, enter)...)
+	if out := screen(m); !strings.Contains(out, "auto-review is on") {
+		t.Errorf("no cost notice after enabling auto-review:\n%s", out)
 	}
 }

@@ -191,6 +191,9 @@ func (e *Engine) enqueue(res poller.Result) {
 	if !ok || !v.AutoReview || res.PRs == nil {
 		return
 	}
+	if res.Query != "" && res.Query != v.Query {
+		return // from before the view was edited: those PRs no longer match
+	}
 	agentName := v.Agent
 	if agentName == "" {
 		agentName = e.cfg.DefaultAgent

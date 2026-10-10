@@ -49,7 +49,7 @@ func TestRunPollsEveryViewImmediately(t *testing.T) {
 	if a.View != "A" || b.View != "B" {
 		t.Fatalf("views = %s,%s", a.View, b.View)
 	}
-	if len(a.PRs) != 1 || a.PRs[0].Title != "qa" || a.Err != nil || a.At.IsZero() {
+	if len(a.PRs) != 1 || a.PRs[0].Title != "qa" || a.Err != nil || a.At.IsZero() || a.Query != "qa" {
 		t.Errorf("result A = %+v", a)
 	}
 }

@@ -37,11 +37,27 @@ func TestWriteDefaultsNeverOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(created) != 2 || filepath.Base(created[0]) != "default.md" || filepath.Base(created[1]) != "views.toml" {
-		t.Errorf("created = %v, want the prompt and views.toml", created)
+	if len(created) != 1 || filepath.Base(created[0]) != "default.md" {
+		t.Errorf("created = %v, want only the prompt (views.toml only comes with a new config)", created)
 	}
 	data, _ := os.ReadFile(p)
 	if string(data) != "mine" {
 		t.Error("existing config was overwritten")
+	}
+}
+
+func TestReinitWithOldStarterViewStillLoads(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.toml")
+	// An install from before views.toml: the starter view lives in config.toml.
+	old := DefaultConfigTOML + "\n[[view]]\nname = \"Review requested\"\nquery = \"is:open is:pr review-requested:@me\"\n"
+	if err := os.WriteFile(p, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteDefaults(p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err != nil {
+		t.Fatalf("re-running init broke the config: %v", err)
 	}
 }
