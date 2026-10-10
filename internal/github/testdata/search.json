@@ -1,0 +1,43 @@
+{
+  "search": {
+    "nodes": [
+      {
+        "number": 42,
+        "title": "Add retries to fetcher",
+        "url": "https://github.com/o/r/pull/42",
+        "body": "Retries transient errors.",
+        "isDraft": false,
+        "updatedAt": "2026-10-09T10:00:00Z",
+        "additions": 120,
+        "deletions": 30,
+        "changedFiles": 4,
+        "baseRefName": "main",
+        "headRefName": "retries",
+        "headRefOid": "abc1234def5678",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "author": {"login": "octocat"},
+        "repository": {"nameWithOwner": "o/r"},
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "PENDING"}}}]}
+      },
+      {},
+      {
+        "number": 7,
+        "title": "WIP: rewrite",
+        "url": "https://github.com/o/r/pull/7",
+        "body": "",
+        "isDraft": true,
+        "updatedAt": "2026-10-08T09:00:00Z",
+        "additions": 1,
+        "deletions": 0,
+        "changedFiles": 1,
+        "baseRefName": "main",
+        "headRefName": "rewrite",
+        "headRefOid": "fff0000",
+        "reviewDecision": null,
+        "author": null,
+        "repository": {"nameWithOwner": "o/r"},
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+      }
+    ]
+  }
+}
