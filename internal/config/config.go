@@ -137,3 +137,12 @@ func Load(path string) (Config, error) {
 	}
 	return cfg, nil
 }
+
+// ThemesDir is where user theme files live: <config dir>/themes. It is empty
+// for a config that wasn't loaded from a file.
+func (c *Config) ThemesDir() string {
+	if c.baseDir == "" {
+		return ""
+	}
+	return filepath.Join(c.baseDir, "themes")
+}

@@ -8,7 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/AdamIsrael/ghost/internal/config"
 )
 
 func noColor(c color.Color) bool {
@@ -17,20 +16,6 @@ func noColor(c color.Color) bool {
 	}
 	_, ok := c.(lipgloss.NoColor)
 	return ok
-}
-
-func TestThemesCoverConfig(t *testing.T) {
-	for _, name := range config.KnownThemes {
-		if name == "auto" {
-			continue
-		}
-		if th, ok := themeByName(name); !ok || th.Name != name {
-			t.Errorf("config theme %q has no TUI theme", name)
-		}
-	}
-	if len(themeOrder) != len(config.KnownThemes)-1 {
-		t.Errorf("themeOrder %v vs config %v", themeOrder, config.KnownThemes)
-	}
 }
 
 func TestDarkThemeMutedIsReadable(t *testing.T) {

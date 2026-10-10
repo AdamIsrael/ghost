@@ -196,3 +196,34 @@ func TestThemeDefaultAndValidation(t *testing.T) {
 		t.Errorf("valid theme rejected: %v", err)
 	}
 }
+
+func TestUnknownThemeListsOptions(t *testing.T) {
+	cfg := mustParse(t, "theme = \"neon\"\n"+minimal)
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "tokyo-night") || !strings.Contains(err.Error(), "neon.toml") {
+		t.Fatalf("want error listing built-ins and the file to add, got %v", err)
+	}
+}
+
+func TestUserThemeAccepted(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "themes"), 0o755)
+	writeFile(t, filepath.Join(dir, "themes", "mine.toml"), "muted = \"#aaaaaa\"\n")
+	cfg := filepath.Join(dir, "config.toml")
+	writeFile(t, cfg, "theme = \"mine\"\n"+minimal)
+	if _, err := Load(cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBrokenThemeFileFailsLoad(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "themes"), 0o755)
+	bad := filepath.Join(dir, "themes", "bad.toml")
+	writeFile(t, bad, "muted = \"grey\"\n")
+	cfg := filepath.Join(dir, "config.toml")
+	writeFile(t, cfg, minimal) // theme is auto; the broken file still fails
+	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), bad) {
+		t.Fatalf("want error naming %s, got %v", bad, err)
+	}
+}

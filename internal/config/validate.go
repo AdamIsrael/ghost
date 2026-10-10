@@ -5,17 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/AdamIsrael/ghost/internal/paths"
+	"github.com/AdamIsrael/ghost/internal/theme"
 )
-
-// KnownThemes lists the TUI color themes. "auto" picks dark or light from the
-// terminal background.
-var KnownThemes = []string{"auto", "dark", "light", "high-contrast", "mono"}
 
 // KnownAgentKinds lists the agent implementations Ghost can run.
 var KnownAgentKinds = map[string]bool{"claude": true}
@@ -43,8 +39,15 @@ func (c *Config) Validate() error {
 	if c.PostMode != "confirm" && c.PostMode != "auto" {
 		add(`post_mode must be "confirm" or "auto"`)
 	}
-	if !slices.Contains(KnownThemes, c.Theme) {
-		add("theme must be one of %s", strings.Join(KnownThemes, ", "))
+	if themes, err := theme.Load(c.ThemesDir()); err != nil {
+		add("%v", err)
+	} else if _, ok := themes.Get(c.Theme); c.Theme != "auto" && !ok {
+		dir := c.ThemesDir()
+		if dir == "" {
+			dir = "<config dir>/themes"
+		}
+		add("theme %q not found: use auto, a built-in (%s), or add %s",
+			c.Theme, strings.Join(theme.BuiltinOrder, ", "), filepath.Join(dir, c.Theme+".toml"))
 	}
 	if c.AutoApprove.MaxChangedLines < 0 {
 		add("auto_approve.max_changed_lines must be 0 (no limit) or more")
