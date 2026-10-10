@@ -286,3 +286,42 @@ func (s *Store) Audit(repo string, number, limit int) ([]AuditEvent, error) {
 	}
 	return out, rows.Err()
 }
+
+// SupersedeApprovals marks the waiting or pending approvals of a PR's other
+// reviews not eligible (a newer review replaces them) and returns them.
+func (s *Store) SupersedeApprovals(prID, keepID int64, note string) ([]Review, error) {
+	rows, err := s.db.Query(`SELECT `+reviewCols+` FROM reviews r JOIN prs p ON p.id = r.pr_id
+		WHERE r.pr_id = ? AND r.id != ? AND r.approval IN (?, ?)`, prID, keepID, ApprovalWaiting, ApprovalPending)
+	if err != nil {
+		return nil, err
+	}
+	var out []Review
+	for rows.Next() {
+		r, err := scanReview(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	rows.Close()
+	for i := range out {
+		if _, err := s.TransitionApproval(out[i].ID, out[i].Approval, ApprovalNo); err != nil {
+			return nil, err
+		}
+		if _, err := s.db.Exec(`UPDATE reviews SET approval_note = ? WHERE id = ?`, note, out[i].ID); err != nil {
+			return nil, err
+		}
+		out[i].Approval, out[i].ApprovalNote = ApprovalNo, note
+	}
+	return out, nil
+}
+
+// HeadApproved reports whether another review of the same PR commit is
+// approved by Ghost, or may be (in flight or unknown).
+func (s *Store) HeadApproved(prID int64, headSHA string, exceptID int64) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM reviews WHERE pr_id = ? AND head_sha = ? AND id != ? AND approval IN (?, ?, ?)`,
+		prID, headSHA, exceptID, ApprovalApproved, ApprovalApproving, ApprovalUnknown).Scan(&n)
+	return n > 0, err
+}

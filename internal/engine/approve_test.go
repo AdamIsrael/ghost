@@ -210,3 +210,66 @@ func TestApprovalDisabledDoesNothing(t *testing.T) {
 		t.Fatalf("approval %q audit %s", h.approval(1), kinds(h.e.PRState("o/r", 1).Audit))
 	}
 }
+
+func TestRereviewSupersedesOlderApproval(t *testing.T) {
+	h := approvingHarness(t, func(c *config.Config) { c.AutoApprove.RequireConfirm = false })
+	h.ci[1] = "PENDING"
+	h.postedReview(t) // review #1: approve, waiting on CI
+	if h.approval(1) != store.ApprovalWaiting {
+		t.Fatalf("approval = %q", h.approval(1))
+	}
+	h.rev.mu.Lock()
+	h.rev.res.Verdict = agent.RequestChanges
+	h.rev.mu.Unlock()
+	if err := h.e.Rereview(ghPR(1, "sha1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "second review", func() bool { return h.rev.count() == 2 })
+	h.mu.Lock()
+	h.ci[1] = "SUCCESS"
+	h.mu.Unlock()
+	green := ghPR(1, "sha1")
+	green.CIState = "SUCCESS"
+	h.e.HandlePoll(poller.Result{View: "Watch", PRs: []github.PR{green}, At: time.Now()})
+	time.Sleep(100 * time.Millisecond)
+	if h.approveCount() != 0 {
+		t.Fatal("an older review approved the PR after a newer review replaced it")
+	}
+	found := false
+	for _, ev := range h.e.PRState("o/r", 1).Audit {
+		found = found || strings.Contains(ev.Message, "superseded")
+	}
+	if !found {
+		t.Error("audit should say the older approval was superseded")
+	}
+}
+
+func TestSameCommitNotApprovedTwice(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.postedReview(t)
+	if err := h.e.Approve(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.Rereview(ghPR(1, "sha1")); err != nil {
+		t.Fatal(err)
+	}
+	h.waitAudit(t, 1, "ready to post")
+	waitFor(t, "second review ready", func() bool { return h.state(1) == store.Ready })
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	if h.approval(1) == store.ApprovalPending {
+		t.Fatal("a commit Ghost already approved must not become pending again")
+	}
+	if err := h.e.Approve(context.Background(), "o/r", 1); err == nil || h.approveCount() != 1 {
+		t.Fatalf("err %v approvals %d", err, h.approveCount())
+	}
+}
+
+func TestUnreadableCommentsAreNotEligible(t *testing.T) {
+	h := approvingHarness(t, nil)
+	d := h.e.decide(&store.Review{Verdict: "approve", Comments: "{not json"}, github.PR{CIState: "SUCCESS"})
+	if d.Eligible || d.Waiting {
+		t.Fatalf("unreadable comments must block approval: %+v", d)
+	}
+}

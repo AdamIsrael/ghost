@@ -201,6 +201,12 @@ func (e *Engine) enqueueAudited(prID int64, headSHA, agentName string, force boo
 		return false
 	}
 	e.audit(prID, id, "queued", msg)
+	// Only a PR's latest review may lead to an approval.
+	if old, err := e.d.Store.SupersedeApprovals(prID, id, fmt.Sprintf("superseded by review #%d", id)); err == nil {
+		for _, r := range old {
+			e.audit(r.PRID, r.ID, "not approved", r.ApprovalNote)
+		}
+	}
 	return true
 }
 

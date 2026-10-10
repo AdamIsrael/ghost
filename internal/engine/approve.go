@@ -17,8 +17,27 @@ func approvalMarker(id int64) string { return fmt.Sprintf("<!-- ghost-approval-i
 
 func (e *Engine) decide(r *store.Review, pr github.PR) policy.Decision {
 	var comments []agent.InlineComment
-	_ = json.Unmarshal([]byte(r.Comments), &comments)
+	if err := json.Unmarshal([]byte(r.Comments), &comments); err != nil {
+		// Fail closed: unreadable comments could hide blocking ones.
+		return policy.Decision{Reasons: []string{"review comments are unreadable"}}
+	}
 	return policy.Evaluate(e.cfg.AutoApprove, policy.Input{PR: pr, Verdict: r.Verdict, Comments: comments})
+}
+
+// blockedForApproval returns why r may not lead to an approval regardless of
+// the rules: a newer review of the PR exists, or Ghost already approved (or
+// may have approved) this commit through another review.
+func (e *Engine) blockedForApproval(r *store.Review) string {
+	if latest, err := e.d.Store.LatestReview(r.Repo, r.Number); err != nil || latest == nil || latest.ID != r.ID {
+		if latest != nil {
+			return fmt.Sprintf("superseded by review #%d", latest.ID)
+		}
+		return "could not confirm this is the latest review"
+	}
+	if done, err := e.d.Store.HeadApproved(r.PRID, r.HeadSHA, r.ID); err != nil || done {
+		return "Ghost already approved this commit"
+	}
+	return ""
 }
 
 // evaluateApproval sets a posted review's approval state from the rules. pr
@@ -37,6 +56,10 @@ func (e *Engine) evaluateApproval(ctx context.Context, r *store.Review, pr *gith
 	}
 	if pr.HeadSHA != r.HeadSHA {
 		e.setApproval(r, store.ApprovalNo, fmt.Sprintf("superseded: PR head moved to %.7s", pr.HeadSHA))
+		return
+	}
+	if why := e.blockedForApproval(r); why != "" {
+		e.setApproval(r, store.ApprovalNo, why)
 		return
 	}
 	dec := e.decide(r, *pr)
@@ -106,6 +129,10 @@ func (e *Engine) Approve(ctx context.Context, repo string, number int) error {
 // approve claims the review's approval (pending/unknown → approving), checks
 // the rules against the PR as it is now, and posts the approval.
 func (e *Engine) approve(ctx context.Context, r *store.Review) error {
+	if why := e.blockedForApproval(r); why != "" {
+		e.setApproval(r, store.ApprovalNo, why)
+		return errors.New(why)
+	}
 	from := r.Approval
 	ok, err := e.d.Store.TransitionApproval(r.ID, from, store.ApprovalApproving)
 	if err != nil {
