@@ -44,7 +44,10 @@ type GraphQL interface {
 	DoWithContext(ctx context.Context, query string, variables map[string]interface{}, response interface{}) error
 }
 
-type Client struct{ gql GraphQL }
+type Client struct {
+	gql  GraphQL
+	rest REST
+}
 
 func New(gql GraphQL) *Client { return &Client{gql: gql} }
 
@@ -54,7 +57,11 @@ func NewDefault() (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return New(gql), nil
+	rest, err := api.DefaultRESTClient()
+	if err != nil {
+		return nil, err
+	}
+	return New(gql).WithREST(rest), nil
 }
 
 const searchQuery = `query($q: String!, $first: Int!) {

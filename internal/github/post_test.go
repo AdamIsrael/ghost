@@ -1,0 +1,100 @@
+package github
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/cli/go-gh/v2/pkg/api"
+)
+
+type restCall struct {
+	method, path string
+	body         ReviewPost
+}
+
+type fakeREST struct {
+	calls []restCall
+	errs  []error // returned in order; nil when exhausted
+}
+
+func (f *fakeREST) DoWithContext(_ context.Context, method, path string, body io.Reader, _ interface{}) error {
+	var p ReviewPost
+	data, _ := io.ReadAll(body)
+	json.Unmarshal(data, &p)
+	f.calls = append(f.calls, restCall{method, path, p})
+	if len(f.errs) == 0 {
+		return nil
+	}
+	err := f.errs[0]
+	f.errs = f.errs[1:]
+	return err
+}
+
+var err422 = &api.HTTPError{StatusCode: 422, Message: "Unprocessable Entity"}
+
+func samplePost() ReviewPost {
+	return ReviewPost{CommitID: "abc", Event: "REQUEST_CHANGES", Body: "Summary",
+		Comments: []ReviewComment{{Path: "a.go", Line: 3, Body: "**Blocking:** nil deref"}}}
+}
+
+func TestPostReview(t *testing.T) {
+	f := &fakeREST{}
+	res, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, samplePost())
+	if err != nil || res.Folded || res.Downgraded {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if len(f.calls) != 1 || f.calls[0].method != "POST" || f.calls[0].path != "repos/o/r/pulls/7/reviews" {
+		t.Fatalf("calls = %+v", f.calls)
+	}
+	got := f.calls[0].body
+	if got.CommitID != "abc" || got.Event != "REQUEST_CHANGES" || len(got.Comments) != 1 || got.Comments[0].Side != "RIGHT" {
+		t.Errorf("body = %+v", got)
+	}
+}
+
+func TestPostReviewFallbackChain(t *testing.T) {
+	f := &fakeREST{errs: []error{err422, err422}}
+	res, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, samplePost())
+	if err != nil || !res.Folded || !res.Downgraded || len(f.calls) != 3 {
+		t.Fatalf("res %+v err %v calls %d", res, err, len(f.calls))
+	}
+	folded := f.calls[1].body
+	if len(folded.Comments) != 0 || !strings.Contains(folded.Body, "`a.go:3`") || !strings.Contains(folded.Body, "nil deref") || folded.Event != "REQUEST_CHANGES" {
+		t.Errorf("folded attempt = %+v", folded)
+	}
+	if last := f.calls[2].body; last.Event != "COMMENT" || len(last.Comments) != 0 {
+		t.Errorf("downgraded attempt = %+v", last)
+	}
+}
+
+func TestPostReviewFoldOnlySucceeds(t *testing.T) {
+	f := &fakeREST{errs: []error{err422}}
+	res, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, samplePost())
+	if err != nil || !res.Folded || res.Downgraded || len(f.calls) != 2 {
+		t.Fatalf("res %+v err %v calls %d", res, err, len(f.calls))
+	}
+}
+
+func TestPostReviewNoRetryOnOtherErrors(t *testing.T) {
+	f := &fakeREST{errs: []error{&api.HTTPError{StatusCode: 500}}}
+	if _, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, samplePost()); err == nil || len(f.calls) != 1 {
+		t.Fatalf("err %v calls %d", err, len(f.calls))
+	}
+	f = &fakeREST{errs: []error{errors.New("network down")}}
+	if _, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, samplePost()); err == nil || len(f.calls) != 1 {
+		t.Fatalf("err %v calls %d", err, len(f.calls))
+	}
+}
+
+func TestPostReviewGivesUpAfterChain(t *testing.T) {
+	p := samplePost()
+	p.Event = "COMMENT"
+	f := &fakeREST{errs: []error{err422, err422}}
+	if _, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, p); err == nil || len(f.calls) != 2 {
+		t.Fatalf("COMMENT reviews have nothing to downgrade: err %v calls %d", err, len(f.calls))
+	}
+}
