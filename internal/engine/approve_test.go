@@ -378,9 +378,13 @@ func TestStaleApprovalWriteIsDropped(t *testing.T) {
 	h.postedReview(t)
 	stale, _ := h.st.LatestReview("o/r", 1) // waiting
 	cur, _ := h.st.LatestReview("o/r", 1)
-	h.e.setApproval(cur, store.ApprovalWaiting, store.ApprovalNo, "superseded by review #9")
+	if !h.e.setApproval(cur, store.ApprovalWaiting, store.ApprovalNo, "superseded by review #9") {
+		t.Fatal("current-state change refused")
+	}
 	n := len(h.e.PRState("o/r", 1).Audit)
-	h.e.setApproval(stale, store.ApprovalWaiting, store.ApprovalPending, "meets the rules")
+	if h.e.setApproval(stale, store.ApprovalWaiting, store.ApprovalPending, "meets the rules") {
+		t.Error("setApproval must report a lost compare-and-set, so callers don't act on it")
+	}
 	if h.approval(1) != store.ApprovalNo || len(h.e.PRState("o/r", 1).Audit) != n {
 		t.Errorf("a stale writer overwrote a newer approval state: %q", h.approval(1))
 	}

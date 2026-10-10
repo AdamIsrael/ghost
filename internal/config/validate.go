@@ -36,7 +36,7 @@ func (c *Config) Validate() error {
 	if c.MaxCostPerReviewUSD <= 0 {
 		add("max_cost_per_review_usd must be greater than 0")
 	} else if c.MaxCostPerReviewUSD > c.MaxDailyCostUSD && c.MaxDailyCostUSD > 0 {
-		add("max_cost_per_review_usd ($%.2f) is more than max_daily_cost_usd ($%.2f), so no review could ever start",
+		add("max_cost_per_review_usd ($%.2f) is more than max_daily_cost_usd ($%.2f), so the daily budget could never fit a review",
 			c.MaxCostPerReviewUSD, c.MaxDailyCostUSD)
 	}
 	if c.PostMode != "confirm" && c.PostMode != "auto" {

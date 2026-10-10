@@ -71,8 +71,9 @@ func (e *Engine) evaluateApproval(ctx context.Context, r *store.Review, pr *gith
 	case e.cfg.AutoApprove.RequireConfirm:
 		e.setApproval(r, r.Approval, store.ApprovalPending, "meets the auto-approve rules; press a to approve")
 	default:
-		e.setApproval(r, r.Approval, store.ApprovalPending, "meets the auto-approve rules")
-		_ = e.approve(ctx, r) // outcome is audited
+		if e.setApproval(r, r.Approval, store.ApprovalPending, "meets the auto-approve rules") {
+			_ = e.approve(ctx, r) // outcome is audited
+		}
 	}
 }
 
@@ -80,10 +81,10 @@ func (e *Engine) evaluateApproval(ctx context.Context, r *store.Review, pr *gith
 // database still holds `from`: a writer holding a stale review can't
 // overwrite a newer decision (e.g. a supersede). It writes only the approval
 // columns, and audits only real changes from what r held before.
-func (e *Engine) setApproval(r *store.Review, from, state, note string) {
+func (e *Engine) setApproval(r *store.Review, from, state, note string) bool {
 	ok, err := e.d.Store.UpdateApproval(r.ID, from, state, note)
 	if err != nil || !ok {
-		return
+		return false
 	}
 	changed := r.Approval != state || r.ApprovalNote != note
 	r.Approval, r.ApprovalNote = state, note
@@ -93,7 +94,7 @@ func (e *Engine) setApproval(r *store.Review, from, state, note string) {
 		e.mu.Unlock()
 	}
 	if !changed {
-		return
+		return true
 	}
 	kind := map[string]string{
 		store.ApprovalWaiting: "approval waiting", store.ApprovalPending: "approval pending",
@@ -103,6 +104,7 @@ func (e *Engine) setApproval(r *store.Review, from, state, note string) {
 	if kind != "" {
 		e.audit(r.PRID, r.ID, kind, note)
 	}
+	return true
 }
 
 // recheckApprovals re-evaluates waiting approvals for the PRs in a poll

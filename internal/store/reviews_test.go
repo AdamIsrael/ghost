@@ -246,9 +246,12 @@ func TestApprovalFieldsRoundTrip(t *testing.T) {
 	prID, _ := s.UpsertPR(pr(1, "a"))
 	s.EnqueueReview(prID, "a", "claude", false)
 	r, _ := s.ClaimNext()
-	r.State, r.Approval, r.ApprovalNote = Posted, ApprovalWaiting, "CI is pending"
+	r.State = Posted
 	if err := s.SaveReview(r); err != nil {
 		t.Fatal(err)
+	}
+	if ok, _ := s.UpdateApproval(r.ID, "", ApprovalWaiting, "CI is pending"); !ok {
+		t.Fatal("UpdateApproval refused")
 	}
 	got, _ := s.LatestReview("o/r", 1)
 	if got.Approval != ApprovalWaiting || got.ApprovalNote != "CI is pending" {
@@ -280,8 +283,9 @@ func TestFailInterruptedSettlesApproving(t *testing.T) {
 	prID, _ := s.UpsertPR(pr(1, "a"))
 	s.EnqueueReview(prID, "a", "claude", false)
 	r, _ := s.ClaimNext()
-	r.State, r.Approval = Posted, ApprovalApproving
+	r.State = Posted
 	s.SaveReview(r)
+	s.UpdateApproval(r.ID, "", ApprovalApproving, "")
 	if _, err := s.FailInterrupted(1.5); err != nil {
 		t.Fatal(err)
 	}
@@ -295,8 +299,9 @@ func TestUpdateApprovalIsCompareAndSet(t *testing.T) {
 	prID, _ := s.UpsertPR(pr(1, "a"))
 	s.EnqueueReview(prID, "a", "claude", false)
 	r, _ := s.ClaimNext()
-	r.State, r.Approval = Posted, ApprovalNo
+	r.State = Posted
 	s.SaveReview(r)
+	s.UpdateApproval(r.ID, "", ApprovalNo, "")
 	if ok, err := s.UpdateApproval(r.ID, ApprovalWaiting, ApprovalPending, "stale"); ok || err != nil {
 		t.Fatalf("stale update applied: %v %v", ok, err)
 	}
@@ -306,5 +311,20 @@ func TestUpdateApprovalIsCompareAndSet(t *testing.T) {
 	got, _ := s.LatestReview("o/r", 1)
 	if got.Approval != ApprovalWaiting || got.ApprovalNote != "fresh" || got.State != Posted {
 		t.Errorf("got %+v", got)
+	}
+}
+
+func TestSaveReviewNeverWritesApproval(t *testing.T) {
+	s := openTest(t)
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	s.EnqueueReview(prID, "a", "claude", false)
+	r, _ := s.ClaimNext()
+	r.State = Posted
+	s.SaveReview(r)
+	s.UpdateApproval(r.ID, "", ApprovalNo, "superseded by review #2")
+	r.Approval, r.ApprovalNote = ApprovalPending, "stale" // stale in-memory copy
+	s.SaveReview(r)
+	if got, _ := s.LatestReview("o/r", 1); got.Approval != ApprovalNo || got.ApprovalNote != "superseded by review #2" {
+		t.Errorf("SaveReview overwrote the approval: %+v", got)
 	}
 }

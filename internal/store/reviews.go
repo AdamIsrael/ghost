@@ -140,7 +140,9 @@ func (s *Store) ClaimNext() (*Review, error) {
 	return scanReview(s.db.QueryRow(`SELECT `+reviewCols+` FROM reviews r JOIN prs p ON p.id = r.pr_id WHERE r.id = ?`, id))
 }
 
-// SaveReview writes a review's mutable fields. Leaving the running state
+// SaveReview writes a review's mutable fields except its approval, which
+// only changes through compare-and-set (UpdateApproval, TransitionApproval)
+// so a stale in-memory review can't undo a newer decision. Leaving the running state
 // stamps finished_at once, which is when its cost counts toward the day.
 func (s *Store) SaveReview(r *Review) error {
 	var finished sql.NullString
@@ -154,8 +156,8 @@ func (s *Store) SaveReview(r *Review) error {
 		r.Comments = "[]"
 	}
 	_, err := s.db.Exec(`UPDATE reviews SET state = ?, prompt = ?, verdict = ?, summary = ?, comments = ?,
-		error = ?, cost_usd = ?, finished_at = ?, approval = ?, approval_note = ? WHERE id = ?`,
-		r.State, r.Prompt, r.Verdict, r.Summary, r.Comments, r.Error, r.CostUSD, finished, r.Approval, r.ApprovalNote, r.ID)
+		error = ?, cost_usd = ?, finished_at = ? WHERE id = ?`,
+		r.State, r.Prompt, r.Verdict, r.Summary, r.Comments, r.Error, r.CostUSD, finished, r.ID)
 	return err
 }
 
@@ -321,16 +323,19 @@ func (s *Store) SupersedeApprovals(prID, keepID int64, note string) ([]Review, e
 		out = append(out, *r)
 	}
 	rows.Close()
-	for i := range out {
-		if _, err := s.TransitionApproval(out[i].ID, out[i].Approval, ApprovalNo); err != nil {
+	var changed []Review
+	for _, r := range out {
+		ok, err := s.UpdateApproval(r.ID, r.Approval, ApprovalNo, note)
+		if err != nil {
 			return nil, err
 		}
-		if _, err := s.db.Exec(`UPDATE reviews SET approval_note = ? WHERE id = ?`, note, out[i].ID); err != nil {
-			return nil, err
+		if !ok {
+			continue // changed meanwhile (e.g. now approving); leave it alone
 		}
-		out[i].Approval, out[i].ApprovalNote = ApprovalNo, note
+		r.Approval, r.ApprovalNote = ApprovalNo, note
+		changed = append(changed, r)
 	}
-	return out, nil
+	return changed, nil
 }
 
 // HeadApproved reports whether another review of the same PR commit is
