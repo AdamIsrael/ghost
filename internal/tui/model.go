@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/engine"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/poller"
 	"github.com/AdamIsrael/ghost/internal/preflight"
@@ -24,6 +26,18 @@ type Options struct {
 	PollNow         func()
 	PollDisabled    string // why polling is off; shown in empty lists
 	OpenURL         func(string) error
+	Engine          Engine // nil: browse only
+}
+
+// Engine is what the TUI needs from the review engine.
+type Engine interface {
+	HandlePoll(poller.Result)
+	Snapshot() engine.Snapshot
+	PRState(repo string, number int) engine.PRState
+	Rereview(github.PR) error
+	PostPending(ctx context.Context, repo string, number int) error
+	TogglePause() bool
+	Changes() <-chan struct{}
 }
 
 type Model struct {
@@ -42,11 +56,33 @@ type resultMsg poller.Result
 
 type openedMsg struct{ err error }
 
+type changeMsg struct{}
+
+type engineDoneMsg struct {
+	what string
+	err  error
+}
+
+func waitForChange(e Engine) tea.Cmd {
+	if e == nil {
+		return nil
+	}
+	ch := e.Changes()
+	return func() tea.Msg {
+		if _, ok := <-ch; !ok {
+			return nil
+		}
+		return changeMsg{}
+	}
+}
+
 func New(o Options) Model {
 	return Model{opts: o, prs: map[string][]github.PR{}, errs: map[string]error{}}
 }
 
-func (m Model) Init() tea.Cmd { return waitForResult(m.opts.Results) }
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(waitForResult(m.opts.Results), waitForChange(m.opts.Engine))
+}
 
 func waitForResult(ch <-chan poller.Result) tea.Cmd {
 	if ch == nil {
@@ -95,6 +131,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case resultMsg:
+		if m.opts.Engine != nil {
+			m.opts.Engine.HandlePoll(poller.Result(msg))
+		}
 		m.lastPoll = msg.At
 		if msg.Err != nil {
 			m.errs[msg.View] = msg.Err
@@ -113,6 +152,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clampCursor()
 		return m, waitForResult(m.opts.Results)
+	case changeMsg:
+		return m, waitForChange(m.opts.Engine)
+	case engineDoneMsg:
+		m.flash = ""
+		if msg.err != nil {
+			m.flash = msg.what + ": " + msg.err.Error()
+		}
 	case openedMsg:
 		m.flash = ""
 		if msg.err != nil {
@@ -148,6 +194,26 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 	case "R":
 		if m.opts.PollNow != nil {
 			m.opts.PollNow()
+		}
+	case "r":
+		pr := m.selectedPR()
+		if pr == nil || m.opts.Engine == nil {
+			return m, nil
+		}
+		e, p := m.opts.Engine, *pr
+		return m, func() tea.Msg { return engineDoneMsg{"re-review", e.Rereview(p)} }
+	case "P":
+		pr := m.selectedPR()
+		if pr == nil || m.opts.Engine == nil {
+			return m, nil
+		}
+		e, repo, n := m.opts.Engine, pr.Repo, pr.Number
+		return m, func() tea.Msg {
+			return engineDoneMsg{"post", e.PostPending(context.Background(), repo, n)}
+		}
+	case "p":
+		if m.opts.Engine != nil {
+			m.opts.Engine.TogglePause()
 		}
 	case "o", "enter":
 		pr := m.selectedPR()
@@ -213,12 +279,22 @@ func (m Model) render() string {
 		counts[name] = len(prs)
 	}
 	top := renderFilterBar(m.opts.Views, m.active, counts, m.width)
-	bottom := renderStatusBar(statusInfo{
+	si := statusInfo{
 		MaxDailyUSD: m.opts.MaxDailyCostUSD,
 		LastPoll:    m.lastPoll,
 		Err:         m.statusErr(),
 		Checks:      m.opts.Checks,
-	}, m.width)
+	}
+	var st engine.PRState
+	if m.opts.Engine != nil {
+		snap := m.opts.Engine.Snapshot()
+		si.SpendUSD, si.MaxDailyUSD = snap.SpendTodayUSD, snap.MaxDailyUSD
+		si.Running, si.Queued, si.Paused, si.BudgetPaused = snap.Running, snap.Queued, snap.Paused, snap.BudgetPaused
+		if pr := m.selectedPR(); pr != nil {
+			st = m.opts.Engine.PRState(pr.Repo, pr.Number)
+		}
+	}
+	bottom := renderStatusBar(si, m.width)
 	bodyH := m.height - 2
 	if bodyH < 1 {
 		return top
@@ -232,7 +308,7 @@ func (m Model) render() string {
 	}
 	list := renderList(m.currentPRs(), m.cursor, listW, bodyH, m.emptyMessage())
 	sep := strings.TrimSuffix(strings.Repeat("│\n", bodyH), "\n")
-	detail := renderDetail(m.selectedPR(), detailW, bodyH)
+	detail := renderDetail(m.selectedPR(), st, detailW, bodyH)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, dim.Render(sep), detail)
 	return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
 }

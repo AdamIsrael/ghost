@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/engine"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/preflight"
 )
@@ -67,16 +68,16 @@ func TestRenderListEmpty(t *testing.T) {
 
 func TestRenderDetail(t *testing.T) {
 	pr := samplePR(42, "Add retries")
-	out := ansi.Strip(renderDetail(&pr, 60, 20))
+	out := ansi.Strip(renderDetail(&pr, engine.PRState{}, 60, 20))
 	for _, want := range []string{"o/r#42", "Add retries", "@octocat", "+10 −2", "3 files", "Ready", "passing", "review required", "feat → main", "abc1234", "Audit trail", "Body text here."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("detail missing %q:\n%s", want, out)
 		}
 	}
-	if n := len(lines(renderDetail(&pr, 60, 5))); n != 5 {
+	if n := len(lines(renderDetail(&pr, engine.PRState{}, 60, 5))); n != 5 {
 		t.Errorf("detail not clipped to height: %d lines", n)
 	}
-	if !strings.Contains(ansi.Strip(renderDetail(nil, 40, 3)), "No pull request selected") {
+	if !strings.Contains(ansi.Strip(renderDetail(nil, engine.PRState{}, 40, 3)), "No pull request selected") {
 		t.Error("nil PR message missing")
 	}
 }
@@ -101,7 +102,7 @@ func TestRenderStatusBar(t *testing.T) {
 func TestRenderDetailNormalizesCRLF(t *testing.T) {
 	pr := samplePR(1, "t")
 	pr.Body = "line one here\r\nline two"
-	raw := renderDetail(&pr, 60, 20)
+	raw := renderDetail(&pr, engine.PRState{}, 60, 20)
 	if strings.Contains(raw, "\r") {
 		t.Error("carriage return reached the terminal")
 	}
@@ -117,13 +118,13 @@ func TestRenderStripsControlAndEscapeSequences(t *testing.T) {
 	pr.Author = "bad\nactor"
 	for name, raw := range map[string]string{
 		"row":    renderRow(pr, 80, false),
-		"detail": renderDetail(&pr, 80, 20),
+		"detail": renderDetail(&pr, engine.PRState{}, 80, 20),
 	} {
 		if strings.ContainsAny(raw, "\r\x07\x9b") || strings.Contains(raw, "\x1b[8m") || strings.Contains(raw, "\x1bP") || strings.Contains(raw, "\x1b]52") {
 			t.Errorf("%s: control or escape sequence reached the terminal: %q", name, raw)
 		}
 	}
-	out := ansi.Strip(renderDetail(&pr, 80, 20))
+	out := ansi.Strip(renderDetail(&pr, engine.PRState{}, 80, 20))
 	if !strings.Contains(out, "@bad actor") || !strings.Contains(out, "y    z") {
 		t.Errorf("single-line fields should fold newlines; tabs should expand:\n%s", out)
 	}

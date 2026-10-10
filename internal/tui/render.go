@@ -9,8 +9,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/engine"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/preflight"
+	"github.com/AdamIsrael/ghost/internal/store"
 	"github.com/AdamIsrael/ghost/internal/textsafe"
 )
 
@@ -63,7 +65,7 @@ func renderFilterBar(views []config.View, active int, counts map[string]int, wid
 		}
 		parts = append(parts, label)
 	}
-	return fit(strings.Join(parts, " ")+"  "+dim.Render("←/→ switch · o open · R refresh · q quit"), width)
+	return fit(strings.Join(parts, " ")+"  "+dim.Render("←/→ switch · o open · r review · P post · p pause · R refresh · q quit"), width)
 }
 
 func renderRow(pr github.PR, width int, sel bool) string {
@@ -111,7 +113,7 @@ func reviewLabel(decision string) string {
 	return strings.ToLower(strings.ReplaceAll(decision, "_", " "))
 }
 
-func renderDetail(pr *github.PR, width, height int) string {
+func renderDetail(pr *github.PR, rs engine.PRState, width, height int) string {
 	if pr == nil {
 		return block([]string{dim.Render("No pull request selected")}, width, height)
 	}
@@ -127,11 +129,9 @@ func renderDetail(pr *github.PR, width, height int) string {
 		fmt.Sprintf("%s → %s  (%s)", cleanLine(pr.HeadRef), cleanLine(pr.BaseRef), sha),
 		dim.Render(cleanLine(pr.URL)),
 		"",
-		bold.Render("── Audit trail ──"),
-		dim.Render("No activity yet. Automated reviews arrive in a later milestone."),
-		"",
-		bold.Render("── Description ──"),
 	}
+	ls = append(ls, reviewLines(rs, width)...)
+	ls = append(ls, "", bold.Render("── Description ──"))
 	body := strings.TrimSpace(clean(pr.Body))
 	if body == "" {
 		ls = append(ls, dim.Render("(no description)"))
@@ -142,11 +142,15 @@ func renderDetail(pr *github.PR, width, height int) string {
 }
 
 type statusInfo struct {
-	SpendUSD    float64
-	MaxDailyUSD float64
-	LastPoll    time.Time
-	Err         string
-	Checks      []preflight.Result
+	SpendUSD     float64
+	MaxDailyUSD  float64
+	LastPoll     time.Time
+	Err          string
+	Checks       []preflight.Result
+	Running      int
+	Queued       int
+	Paused       bool
+	BudgetPaused bool
 }
 
 func renderStatusBar(si statusInfo, width int) string {
@@ -156,8 +160,14 @@ func renderStatusBar(si statusInfo, width int) string {
 	}
 	parts := []string{
 		fmt.Sprintf("Spend today $%.2f / $%.2f", si.SpendUSD, si.MaxDailyUSD),
-		"Reviews 0 running · 0 queued",
+		fmt.Sprintf("Reviews %d running · %d queued", si.Running, si.Queued),
 		"Last poll " + last,
+	}
+	if si.Paused {
+		parts = append(parts, "⏸ paused")
+	}
+	if si.BudgetPaused {
+		parts = append(parts, "budget reached")
 	}
 	var checks []string
 	for _, c := range si.Checks {
@@ -175,4 +185,29 @@ func renderStatusBar(si statusInfo, width int) string {
 		line += "  " + errText.Render("⚠ "+cleanLine(si.Err))
 	}
 	return fit(line, width)
+}
+
+func reviewLines(st engine.PRState, width int) []string {
+	ls := []string{bold.Render("── Audit trail ──")}
+	if len(st.Audit) == 0 {
+		ls = append(ls, dim.Render("No activity yet."))
+	}
+	for _, ev := range st.Audit {
+		ls = append(ls, fmt.Sprintf("%s %s — %s", ev.At.Local().Format("15:04"), cleanLine(ev.Kind), cleanLine(ev.Message)))
+	}
+	r := st.Latest
+	if r == nil {
+		return ls
+	}
+	switch r.State {
+	case store.Ready:
+		ls = append(ls, "", bold.Render(fmt.Sprintf("── Pending review: %s, $%.2f (press P to post) ──", cleanLine(r.Verdict), r.CostUSD)))
+		ls = append(ls, strings.Split(ansi.Wordwrap(clean(r.Summary), width, " "), "\n")...)
+		for _, c := range st.Comments {
+			ls = append(ls, fmt.Sprintf("%s:%d [%s] %s", cleanLine(c.Path), c.Line, cleanLine(c.Severity), cleanLine(c.Body)))
+		}
+	case store.Blocked:
+		ls = append(ls, "", errText.Render("── Review blocked; it will not be posted ──"), cleanLine(r.Error))
+	}
+	return ls
 }
