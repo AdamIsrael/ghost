@@ -135,8 +135,12 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
+	if err := cfg.ValidateThemes(); err != nil {
+		fmt.Fprintln(stderr, "ghost:", err)
+		return 1
+	}
 	themes, err := theme.Load(cfg.ThemesDir())
-	if err != nil { // already validated by config.Load; kept for safety
+	if err != nil { // already checked by ValidateThemes; kept for safety
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
@@ -192,7 +196,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 	opts.SaveViews = func(views []config.View) error {
 		next := cfg
 		next.Views = views
-		if err := next.Validate(); err != nil {
+		if err := next.ValidateViews(); err != nil {
 			return err
 		}
 		var managed []config.View
@@ -252,7 +256,10 @@ func runCheck(cfgPath string, stdout io.Writer, runner preflight.Runner) int {
 		fmt.Fprintf(stdout, "✗ %-7s %v\n", "config", err)
 	} else {
 		fmt.Fprintf(stdout, "✓ %-7s %s\n", "config", cfgPath)
-		if themes, err := theme.Load(cfg.ThemesDir()); err == nil {
+		if err := cfg.ValidateThemes(); err != nil {
+			ok = false
+			fmt.Fprintf(stdout, "✗ %-7s %v\n", "theme", err)
+		} else if themes, err := theme.Load(cfg.ThemesDir()); err == nil {
 			if p, found := themes.Get(cfg.Theme); found && p.Source != "built-in" {
 				for _, problem := range p.ReadabilityProblems() {
 					fmt.Fprintf(stdout, "! %-7s %s: %s\n", "theme", p.ID, problem)

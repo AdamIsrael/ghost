@@ -188,18 +188,18 @@ func TestThemeDefaultAndValidation(t *testing.T) {
 		t.Errorf("default theme = %q", cfg.Theme)
 	}
 	cfg := mustParse(t, "theme = \"neon\"\n"+minimal)
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "theme") {
+	if err := cfg.ValidateThemes(); err == nil || !strings.Contains(err.Error(), "theme") {
 		t.Errorf("want theme error, got %v", err)
 	}
 	cfg = mustParse(t, "theme = \"high-contrast\"\n"+minimal)
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.ValidateThemes(); err != nil {
 		t.Errorf("valid theme rejected: %v", err)
 	}
 }
 
 func TestUnknownThemeListsOptions(t *testing.T) {
 	cfg := mustParse(t, "theme = \"neon\"\n"+minimal)
-	err := cfg.Validate()
+	err := cfg.ValidateThemes()
 	if err == nil || !strings.Contains(err.Error(), "tokyo-night") || !strings.Contains(err.Error(), "neon.toml") {
 		t.Fatalf("want error listing built-ins and the file to add, got %v", err)
 	}
@@ -223,7 +223,35 @@ func TestBrokenThemeFileFailsLoad(t *testing.T) {
 	writeFile(t, bad, "muted = \"grey\"\n")
 	cfg := filepath.Join(dir, "config.toml")
 	writeFile(t, cfg, minimal) // theme is auto; the broken file still fails
-	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), bad) {
+	c, err := Load(cfg)
+	if err != nil {
+		t.Fatalf("Load must not read theme files (ghost review doesn't need them): %v", err)
+	}
+	if err := c.ValidateThemes(); err == nil || !strings.Contains(err.Error(), bad) {
 		t.Fatalf("want error naming %s, got %v", bad, err)
+	}
+}
+
+func TestValidateViewsChecksOnlyViews(t *testing.T) {
+	dir := t.TempDir()
+	prompt := filepath.Join(dir, "p.md")
+	writeFile(t, prompt, "Review {{.Repo}}")
+	cfgPath := filepath.Join(dir, "config.toml")
+	writeFile(t, cfgPath, "[agents.a]\nkind = \"claude\"\nprompt_file = \"p.md\"\n")
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(prompt) // broken after startup
+	cfg.Views = []View{{Name: "A", Query: "q"}}
+	if err := cfg.ValidateViews(); err != nil {
+		t.Errorf("an unrelated broken prompt must not block view saves: %v", err)
+	}
+	cfg.Views = []View{{Name: "A", Query: "q"}, {Name: "A", Query: "r"}, {Name: "B", Agent: "zz"}}
+	err = cfg.ValidateViews()
+	for _, want := range []string{`duplicate view name "A"`, "query is required", `unknown agent "zz"`} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q in %v", want, err)
+		}
 	}
 }

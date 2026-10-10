@@ -264,3 +264,31 @@ func TestCheckWarnsAboutUnreadableUserTheme(t *testing.T) {
 		t.Errorf("no readability warning:\n%s", out.String())
 	}
 }
+
+func brokenThemeConfig(t *testing.T) (dir, cfg string) {
+	t.Helper()
+	dir = t.TempDir()
+	cfg = filepath.Join(dir, "config.toml")
+	var out, errb bytes.Buffer
+	run([]string{"--config", cfg, "init"}, &out, &errb, depsFor(okRunner))
+	os.MkdirAll(filepath.Join(dir, "themes"), 0o755)
+	os.WriteFile(filepath.Join(dir, "themes", "bad.toml"), []byte("muted = \"grey\"\n"), 0o644)
+	return dir, cfg
+}
+
+func TestBrokenThemeOnlyAffectsTUIAndCheck(t *testing.T) {
+	dir, cfg := brokenThemeConfig(t)
+	_, d := newReviewHarness(t, "")
+	var out, errb bytes.Buffer
+	if code := run([]string{"--config", cfg, "review", "o/r#7", "--show-prompt"}, &out, &errb, d); code != 0 {
+		t.Errorf("ghost review must not depend on theme files: exit %d %s", code, errb.String())
+	}
+	errb.Reset()
+	if code := run([]string{"--config", cfg, "--db", filepath.Join(dir, "g.db")}, &out, &errb, depsFor(okRunner)); code != 1 || !strings.Contains(errb.String(), "bad.toml") {
+		t.Errorf("TUI start should fail naming the theme file: exit %d %q", code, errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"--config", cfg, "--check"}, &out, &errb, depsFor(okRunner)); code != 1 || !strings.Contains(out.String(), "bad.toml") {
+		t.Errorf("--check should report the theme file: exit %d\n%s", code, out.String())
+	}
+}

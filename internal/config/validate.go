@@ -39,16 +39,6 @@ func (c *Config) Validate() error {
 	if c.PostMode != "confirm" && c.PostMode != "auto" {
 		add(`post_mode must be "confirm" or "auto"`)
 	}
-	if themes, err := theme.Load(c.ThemesDir()); err != nil {
-		add("%v", err)
-	} else if _, ok := themes.Get(c.Theme); c.Theme != "auto" && !ok {
-		dir := c.ThemesDir()
-		if dir == "" {
-			dir = "<config dir>/themes"
-		}
-		add("theme %q not found: use auto, a built-in (%s), or add %s",
-			c.Theme, strings.Join(theme.BuiltinOrder, ", "), filepath.Join(dir, c.Theme+".toml"))
-	}
 	if c.AutoApprove.MaxChangedLines < 0 {
 		add("auto_approve.max_changed_lines must be 0 (no limit) or more")
 	}
@@ -99,6 +89,17 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if err := c.ValidateViews(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// ValidateViews checks only the views (names, queries, agent references), so
+// saving a view isn't blocked by an unrelated file that broke after startup.
+func (c *Config) ValidateViews() error {
+	var errs []error
+	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 	seen := map[string]bool{}
 	for i, v := range c.Views {
 		label := fmt.Sprintf("view %q", v.Name)
@@ -117,6 +118,25 @@ func (c *Config) Validate() error {
 				add("%s: unknown agent %q", label, v.Agent)
 			}
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// ValidateThemes loads the theme files and checks that the configured theme
+// exists. It is separate from Validate because only the TUI and --check use
+// themes; a broken theme file shouldn't stop ghost review.
+func (c *Config) ValidateThemes() error {
+	var errs []error
+	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+	if themes, err := theme.Load(c.ThemesDir()); err != nil {
+		add("%v", err)
+	} else if _, ok := themes.Get(c.Theme); c.Theme != "auto" && !ok {
+		dir := c.ThemesDir()
+		if dir == "" {
+			dir = "<config dir>/themes"
+		}
+		add("theme %q not found: use auto, a built-in (%s), or add %s",
+			c.Theme, strings.Join(theme.BuiltinOrder, ", "), filepath.Join(dir, c.Theme+".toml"))
 	}
 	return errors.Join(errs...)
 }
