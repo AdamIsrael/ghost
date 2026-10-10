@@ -226,3 +226,7 @@ go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 CI runs these (plus a `gofmt` check) on Linux and macOS for every push and pull request. Pushing a tag like `v0.1.0` builds release binaries with [GoReleaser](https://goreleaser.com) and publishes them on the releases page; `goreleaser release --snapshot --clean` does a local dry run into `dist/`.
 
 The design docs and implementation plans are in [`docs/superpowers/`](docs/superpowers). Work is tracked with [beads](https://github.com/gastownhall/beads) (`bd ready`).
+
+## License
+
+Apache License 2.0; see [LICENSE](LICENSE).
