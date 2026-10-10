@@ -98,3 +98,25 @@ func TestPostReviewGivesUpAfterChain(t *testing.T) {
 		t.Fatalf("COMMENT reviews have nothing to downgrade: err %v calls %d", err, len(f.calls))
 	}
 }
+
+func TestPostReviewOwnPRDowngradesAndKeepsInlineComments(t *testing.T) {
+	own := &api.HTTPError{StatusCode: 422, Message: "Unprocessable Entity",
+		Errors: []api.HTTPErrorItem{{Message: "Review Can not request changes on your own pull request"}}}
+	f := &fakeREST{errs: []error{own}}
+	res, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, samplePost())
+	if err != nil || !res.Downgraded || res.Folded || len(f.calls) != 2 {
+		t.Fatalf("res %+v err %v calls %d", res, err, len(f.calls))
+	}
+	if second := f.calls[1].body; second.Event != "COMMENT" || len(second.Comments) != 1 {
+		t.Errorf("own-PR retry should keep inline comments as a COMMENT review: %+v", second)
+	}
+}
+
+func TestPostReviewOwnPRMessageInMessageField(t *testing.T) {
+	own := &api.HTTPError{StatusCode: 422, Message: "Unprocessable Entity\nCan not approve your own pull request"}
+	f := &fakeREST{errs: []error{own}}
+	res, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, samplePost())
+	if err != nil || !res.Downgraded || res.Folded {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+}

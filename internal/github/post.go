@@ -42,10 +42,11 @@ type PostResult struct {
 	Downgraded bool // event changed to COMMENT
 }
 
-// PostReview submits a review. GitHub answers 422 when an inline comment is
-// outside the diff, and when you request changes on your own PR, so on 422 it
-// retries with the comments folded into the body, then (if the event was not
-// already COMMENT) once more as a plain comment.
+// PostReview submits a review. GitHub answers 422 both when you request
+// changes on (or approve) your own PR and when an inline comment is outside the
+// diff. For the own-PR case it retries as a plain COMMENT, keeping the inline
+// comments; for other 422s it retries with the comments folded into the body,
+// then, if needed, as a COMMENT.
 func (c *Client) PostReview(ctx context.Context, repo string, number int, p ReviewPost) (PostResult, error) {
 	path := fmt.Sprintf("repos/%s/pulls/%d/reviews", repo, number)
 	for i := range p.Comments {
@@ -55,6 +56,11 @@ func (c *Client) PostReview(ctx context.Context, repo string, number int, p Revi
 	}
 	var res PostResult
 	err := c.post(ctx, path, p)
+	if ownPR(err) && p.Event != "COMMENT" {
+		p.Event = "COMMENT"
+		res.Downgraded = true
+		err = c.post(ctx, path, p)
+	}
 	if unprocessable(err) && len(p.Comments) > 0 {
 		p.Body += foldComments(p.Comments)
 		p.Comments = nil
@@ -83,6 +89,20 @@ func (c *Client) post(ctx context.Context, path string, body any) error {
 func unprocessable(err error) bool {
 	var h *api.HTTPError
 	return errors.As(err, &h) && h.StatusCode == 422
+}
+
+// ownPR reports GitHub's refusal to let you approve or request changes on
+// your own pull request.
+func ownPR(err error) bool {
+	var h *api.HTTPError
+	if !errors.As(err, &h) || h.StatusCode != 422 {
+		return false
+	}
+	texts := []string{h.Message}
+	for _, item := range h.Errors {
+		texts = append(texts, item.Message)
+	}
+	return strings.Contains(strings.ToLower(strings.Join(texts, " ")), "your own pull request")
 }
 
 func foldComments(cs []ReviewComment) string {
