@@ -33,6 +33,7 @@ type Config struct {
 	MaxDailyCostUSD      float64          `toml:"max_daily_cost_usd"`
 	MaxCostPerReviewUSD  float64          `toml:"max_cost_per_review_usd"`
 	PostMode             string           `toml:"post_mode"`
+	Theme                string           `toml:"theme"`
 	DefaultAgent         string           `toml:"default_agent"`
 	Agents               map[string]Agent `toml:"agents"`
 	AutoApprove          AutoApprove      `toml:"auto_approve"`
@@ -80,6 +81,7 @@ func Default() Config {
 		MaxDailyCostUSD:      10,
 		MaxCostPerReviewUSD:  1.5,
 		PostMode:             "confirm",
+		Theme:                "auto",
 		Agents:               map[string]Agent{},
 		AutoApprove: AutoApprove{
 			RequireConfirm:     true,

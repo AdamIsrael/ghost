@@ -5,12 +5,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/AdamIsrael/ghost/internal/paths"
 )
+
+// KnownThemes lists the TUI color themes. "auto" picks dark or light from the
+// terminal background.
+var KnownThemes = []string{"auto", "dark", "light", "high-contrast", "mono"}
 
 // KnownAgentKinds lists the agent implementations Ghost can run.
 var KnownAgentKinds = map[string]bool{"claude": true}
@@ -37,6 +42,9 @@ func (c *Config) Validate() error {
 	}
 	if c.PostMode != "confirm" && c.PostMode != "auto" {
 		add(`post_mode must be "confirm" or "auto"`)
+	}
+	if !slices.Contains(KnownThemes, c.Theme) {
+		add("theme must be one of %s", strings.Join(KnownThemes, ", "))
 	}
 	if c.AutoApprove.MaxChangedLines < 0 {
 		add("auto_approve.max_changed_lines must be 0 (no limit) or more")

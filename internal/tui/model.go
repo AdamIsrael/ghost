@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ type Options struct {
 	OpenURL         func(string) error
 	Engine          Engine                    // nil: browse only
 	SaveViews       func([]config.View) error // persists views; nil disables n/e/d
+	Theme           string                    // config theme; "" = dark
+	NoColor         bool                      // NO_COLOR set: force mono
 	Agents          []string                  // agent names for the view form
 }
 
@@ -55,6 +58,9 @@ type Model struct {
 	height   int
 	snap     engine.Snapshot // cached; refreshed on updates, never in View
 	prState  engine.PRState  // selected PR's state, cached likewise
+
+	theme     Theme
+	autoTheme bool // follow the terminal background until t is pressed
 
 	views         []config.View // owned copy; edited with n/e/d
 	form          *viewForm
@@ -86,12 +92,32 @@ func waitForChange(e Engine) tea.Cmd {
 }
 
 func New(o Options) Model {
-	return Model{opts: o, prs: map[string][]github.PR{}, errs: map[string]error{},
+	m := Model{opts: o, prs: map[string][]github.PR{}, errs: map[string]error{},
 		views: append([]config.View(nil), o.Views...)}
+	m.theme, m.autoTheme = resolveTheme(o)
+	return m
+}
+
+// resolveTheme picks the starting theme: mono under NO_COLOR, the named
+// theme, or dark (provisionally, for "auto") otherwise.
+func resolveTheme(o Options) (Theme, bool) {
+	if o.NoColor {
+		t, _ := themeByName("mono")
+		return t, false
+	}
+	if t, ok := themeByName(o.Theme); ok {
+		return t, false
+	}
+	t, _ := themeByName("dark")
+	return t, o.Theme == "auto"
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(waitForResult(m.opts.Results), waitForChange(m.opts.Engine))
+	var bg tea.Cmd
+	if m.autoTheme {
+		bg = tea.RequestBackgroundColor
+	}
+	return tea.Batch(waitForResult(m.opts.Results), waitForChange(m.opts.Engine), bg)
 }
 
 func waitForResult(ch <-chan poller.Result) tea.Cmd {
@@ -207,6 +233,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.flash = "open failed: " + msg.err.Error()
 		}
+	case tea.BackgroundColorMsg:
+		if m.autoTheme {
+			name := "dark"
+			if !msg.IsDark() {
+				name = "light"
+			}
+			m.theme, _ = themeByName(name)
+		}
 	case tea.PasteMsg:
 		if m.form != nil {
 			f, cmd := m.form.paste(msg)
@@ -279,6 +313,12 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg {
 			return engineDoneMsg{"approve", e.Approve(context.Background(), repo, n)}
 		}
+	case "t":
+		i := slices.Index(themeOrder, m.theme.Name)
+		next := themeOrder[(i+1)%len(themeOrder)]
+		m.theme, _ = themeByName(next)
+		m.autoTheme = false
+		m.flash = fmt.Sprintf(`theme: %s (add theme = "%s" to config.toml to keep it)`, next, next)
 	case "n":
 		if m.opts.SaveViews == nil {
 			m.flash = "view editing is unavailable"
@@ -359,6 +399,7 @@ func (m Model) statusErr() string {
 const minDetailWidth = 30
 
 func (m Model) render() string {
+	m.theme.apply()
 	if m.width <= 0 || m.height <= 0 {
 		return "Loading…"
 	}

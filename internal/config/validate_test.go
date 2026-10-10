@@ -182,3 +182,17 @@ func TestMaxChangedLinesNotNegative(t *testing.T) {
 		t.Fatalf("want max_changed_lines error, got %v", err)
 	}
 }
+
+func TestThemeDefaultAndValidation(t *testing.T) {
+	if cfg := mustParse(t, minimal); cfg.Theme != "auto" {
+		t.Errorf("default theme = %q", cfg.Theme)
+	}
+	cfg := mustParse(t, "theme = \"neon\"\n"+minimal)
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "theme") {
+		t.Errorf("want theme error, got %v", err)
+	}
+	cfg = mustParse(t, "theme = \"high-contrast\"\n"+minimal)
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("valid theme rejected: %v", err)
+	}
+}

@@ -10,6 +10,10 @@ max_cost_per_review_usd = 1.5
 # contain a secret are never posted in either mode.
 post_mode = "confirm"
 
+# TUI colors: "auto" (match the terminal background), "dark", "light",
+# "high-contrast" or "mono". Press t in the TUI to try them. NO_COLOR=1 forces mono.
+theme = "auto"
+
 default_agent = "claude"
 
 [agents.claude]

@@ -16,13 +16,8 @@ import (
 	"github.com/AdamIsrael/ghost/internal/textsafe"
 )
 
-var (
-	activeTab = lipgloss.NewStyle().Bold(true).Reverse(true)
-	dim       = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	bold      = lipgloss.NewStyle().Bold(true)
-	selected  = lipgloss.NewStyle().Reverse(true)
-	errText   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-)
+// Render styles; set from the active Theme (see theme.go).
+var dim, errText, bold, selected, activeTab lipgloss.Style
 
 // clean and cleanLine make untrusted GitHub text safe to draw.
 var clean, cleanLine = textsafe.Clean, textsafe.Line
@@ -65,7 +60,7 @@ func renderFilterBar(views []config.View, active int, counts map[string]int, wid
 		}
 		parts = append(parts, label)
 	}
-	return fit(strings.Join(parts, " ")+"  "+dim.Render("←/→ switch · n new · e edit · d delete · o open · r review · P post · a approve · p pause · R refresh · q quit"), width)
+	return fit(strings.Join(parts, " ")+"  "+dim.Render("←/→ switch · n new · e edit · d delete · o open · r review · P post · a approve · p pause · R refresh · t theme · q quit"), width)
 }
 
 func renderRow(pr github.PR, width int, sel bool) string {

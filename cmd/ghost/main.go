@@ -146,6 +146,8 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		MaxDailyCostUSD: cfg.MaxDailyCostUSD,
 		Checks:          preflight.Run(context.Background(), d.runner),
 		OpenURL:         d.openURL,
+		Theme:           cfg.Theme,
+		NoColor:         os.Getenv("NO_COLOR") != "",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
