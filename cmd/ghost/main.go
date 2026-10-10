@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sort"
 	"time"
 
@@ -92,6 +93,27 @@ var (
 	commit  = "none"
 )
 
+var readBuildInfo = debug.ReadBuildInfo
+
+// versionString reports the release version, or for `go install …@vX` builds
+// the module version and VCS revision Go embeds.
+func versionString() string {
+	v, c := version, commit
+	if v == "dev" {
+		if info, ok := readBuildInfo(); ok {
+			if mv := info.Main.Version; mv != "" && mv != "(devel)" {
+				v = mv
+			}
+			for _, s := range info.Settings {
+				if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+					c = s.Value[:7]
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("ghost %s (commit %s)", v, c)
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, defaultDeps()))
 }
@@ -111,7 +133,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		return 2
 	}
 	if *showVersion {
-		fmt.Fprintf(stdout, "ghost %s (commit %s)\n", version, commit)
+		fmt.Fprintln(stdout, versionString())
 		return 0
 	}
 	isInit := fs.Arg(0) == "init"

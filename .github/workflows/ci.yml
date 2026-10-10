@@ -2,15 +2,17 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+  workflow_call: # reused by the release workflow
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Superseded PR runs are cancelled; every main commit keeps its own result.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   lint:
@@ -28,6 +30,8 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+      - name: go.mod tidy
+        run: go mod tidy -diff
       - name: go vet
         run: go vet ./...
       - name: staticcheck

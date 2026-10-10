@@ -23,6 +23,10 @@ archives:
 checksum:
   name_template: checksums.txt
 
+release:
+  prerelease: auto # tags like v0.2.0-rc1 publish as pre-releases
+  replace_existing_artifacts: true # a re-run after a partial upload succeeds
+
 changelog:
   sort: asc
   filters:

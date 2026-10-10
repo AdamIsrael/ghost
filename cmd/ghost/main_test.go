@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -300,5 +301,25 @@ func TestVersionFlag(t *testing.T) {
 	}
 	if got := strings.TrimSpace(out.String()); got != "ghost dev (commit none)" {
 		t.Errorf("version output = %q", got)
+	}
+}
+
+func TestVersionFallsBackToBuildInfo(t *testing.T) {
+	orig := readBuildInfo
+	t.Cleanup(func() { readBuildInfo = orig })
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{
+			Main:     debug.Module{Version: "v0.3.0"},
+			Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc1234def"}},
+		}, true
+	}
+	if got := versionString(); got != "ghost v0.3.0 (commit abc1234)" {
+		t.Errorf("go install build: %q", got)
+	}
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true
+	}
+	if got := versionString(); got != "ghost dev (commit none)" {
+		t.Errorf("local build: %q", got)
 	}
 }
