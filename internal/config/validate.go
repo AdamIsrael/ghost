@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/adamisrael/ghost/internal/paths"
+	"github.com/AdamIsrael/ghost/internal/paths"
 )
 
 // KnownAgentKinds lists the agent implementations Ghost can run.

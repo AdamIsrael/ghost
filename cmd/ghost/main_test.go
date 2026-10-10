@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adamisrael/ghost/internal/preflight"
+	"github.com/AdamIsrael/ghost/internal/preflight"
 )
 
 func okRunner(_ context.Context, name string, _ ...string) (string, error) {

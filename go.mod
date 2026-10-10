@@ -1,4 +1,4 @@
-module github.com/adamisrael/ghost
+module github.com/AdamIsrael/ghost
 
 go 1.27.1
 

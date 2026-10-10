@@ -8,10 +8,10 @@ import (
 	"io"
 	"os"
 
-	"github.com/adamisrael/ghost/internal/config"
-	"github.com/adamisrael/ghost/internal/paths"
-	"github.com/adamisrael/ghost/internal/preflight"
-	"github.com/adamisrael/ghost/internal/store"
+	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/paths"
+	"github.com/AdamIsrael/ghost/internal/preflight"
+	"github.com/AdamIsrael/ghost/internal/store"
 )
 
 func main() {
