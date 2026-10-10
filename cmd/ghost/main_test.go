@@ -191,3 +191,24 @@ func appendFile(t *testing.T, path, s string) {
 		t.Fatal(err)
 	}
 }
+
+func TestStartRunsEngine(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	var out, errb bytes.Buffer
+	run([]string{"--config", cfg, "init"}, &out, &errb, depsFor(okRunner))
+	d := depsFor(okRunner)
+	var gotEngine bool
+	d.runTUI = func(m tea.Model) error {
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 20})
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+		gotEngine = strings.Contains(m.View().Content, "paused")
+		return nil
+	}
+	if code := run([]string{"--config", cfg, "--db", filepath.Join(dir, "g.db")}, &out, &errb, d); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !gotEngine {
+		t.Error("TUI not wired to an engine")
+	}
+}

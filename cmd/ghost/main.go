@@ -13,6 +13,7 @@ import (
 
 	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/engine"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/paths"
 	"github.com/AdamIsrael/ghost/internal/poller"
@@ -32,6 +33,7 @@ type deps struct {
 	getPR       func(ctx context.Context, repo string, number int) (github.PRDetail, error)
 	checkout    func(ctx context.Context, repo string, number int, baseRef, headSHA string) (workspace.Workspace, func(), error)
 	newReviewer func(name string, a config.Agent) (agent.Reviewer, error)
+	postReview  func(ctx context.Context, repo string, number int, p github.ReviewPost) (github.PostResult, error)
 }
 
 func defaultDeps() deps {
@@ -54,6 +56,13 @@ func defaultDeps() deps {
 		checkout: workspace.New(paths.CacheDir(), subproc.Exec).Checkout,
 		newReviewer: func(name string, a config.Agent) (agent.Reviewer, error) {
 			return agent.New(name, a, subproc.Exec)
+		},
+		postReview: func(ctx context.Context, repo string, number int, p github.ReviewPost) (github.PostResult, error) {
+			c, err := github.NewDefault()
+			if err != nil {
+				return github.PostResult{}, err
+			}
+			return c.PostReview(ctx, repo, number, p)
 		},
 	}
 }
@@ -122,6 +131,11 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	eng := engine.New(cfg, engine.Deps{
+		Store: st, GetPR: d.getPR, Checkout: d.checkout, NewReviewer: d.newReviewer, PostReview: d.postReview,
+	})
+	go eng.Run(ctx)
+	opts.Engine = eng
 	if s, err := d.newSearcher(); err != nil {
 		opts.PollDisabled = "GitHub unavailable: " + err.Error()
 	} else if len(cfg.Views) > 0 {
