@@ -118,7 +118,7 @@ agent = "claude-default"        # optional; falls back to default_agent
 - If neither `prompt` nor `prompt_file` is set, a built-in default prompt is used (embedded via `go:embed`, also written out by `ghost init` as a starting file to edit).
 - Config validation fails at startup on: unknown agent referenced by a view, both `prompt` and `prompt_file` set, missing prompt file, template parse errors.
 - The rendered prompt is stored on the review's audit record, so the trail shows exactly what was asked.
-Views edited in the TUI (create/edit/delete) are written back to this file.
+**Views file (decision 2026-10-10):** Ghost never writes `config.toml` (it would lose comments). Views created or edited in the TUI live in `views.toml` next to it; `[[view]]` tables in `config.toml` still work and are read-only in the TUI. Names are unique across both files.
 
 ### TUI layout
 ```

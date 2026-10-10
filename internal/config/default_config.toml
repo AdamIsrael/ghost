@@ -32,8 +32,6 @@ no_blocking_comments = true
 no_changes_requested = true
 max_changed_lines = 400
 
-# auto_review is off by default so nothing is spent until you opt in.
-[[view]]
-name = "Review requested"
-query = "is:open is:pr review-requested:@me"
-auto_review = false
+# Views (the PR searches Ghost polls) live in views.toml next to this file,
+# so the TUI can edit them without touching your comments here. You can also
+# add [[view]] tables to this file; those are read-only in the TUI.

@@ -11,6 +11,14 @@ import (
 //go:embed default_config.toml
 var DefaultConfigTOML string
 
+// defaultViews is the starter views.toml. auto_review is off so nothing is
+// spent until the operator opts in.
+const defaultViews = viewsHeader + `[[view]]
+name = "Review requested"
+query = "is:open is:pr review-requested:@me"
+auto_review = false
+`
+
 // WriteDefaults writes a starter config and prompt beside configPath,
 // skipping any file that already exists. It returns the files it created.
 func WriteDefaults(configPath string) ([]string, error) {
@@ -18,6 +26,7 @@ func WriteDefaults(configPath string) ([]string, error) {
 	files := []struct{ path, content string }{
 		{configPath, DefaultConfigTOML},
 		{filepath.Join(dir, "prompts", "default.md"), DefaultPrompt},
+		{filepath.Join(dir, ViewsFileName), defaultViews},
 	}
 	var created []string
 	for _, f := range files {

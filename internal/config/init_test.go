@@ -12,7 +12,7 @@ func TestWriteDefaultsProducesValidConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(created) != 2 {
+	if len(created) != 3 {
 		t.Fatalf("created = %v, want 2 files", created)
 	}
 	cfg, err := Load(p)
@@ -22,6 +22,9 @@ func TestWriteDefaultsProducesValidConfig(t *testing.T) {
 	got, err := cfg.AgentPrompt("claude")
 	if err != nil || got != DefaultPrompt {
 		t.Errorf("default agent prompt = %q, %v", got, err)
+	}
+	if len(cfg.Views) != 1 || cfg.Views[0].Source != "views.toml" {
+		t.Errorf("starter view should come from views.toml: %+v", cfg.Views)
 	}
 }
 
@@ -34,8 +37,8 @@ func TestWriteDefaultsNeverOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(created) != 1 || filepath.Base(created[0]) != "default.md" {
-		t.Errorf("created = %v, want only the prompt", created)
+	if len(created) != 2 || filepath.Base(created[0]) != "default.md" || filepath.Base(created[1]) != "views.toml" {
+		t.Errorf("created = %v, want the prompt and views.toml", created)
 	}
 	data, _ := os.ReadFile(p)
 	if string(data) != "mine" {

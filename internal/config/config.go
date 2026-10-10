@@ -65,7 +65,11 @@ type View struct {
 	Name       string `toml:"name"`
 	Query      string `toml:"query"`
 	AutoReview bool   `toml:"auto_review"`
-	Agent      string `toml:"agent"`
+	Agent      string `toml:"agent,omitempty"`
+
+	// Source is the file that defined the view: "config.toml" or
+	// "views.toml". Only views.toml views are edited from the TUI.
+	Source string `toml:"-"`
 }
 
 // Default returns the configuration used for any key the file leaves unset.
@@ -118,6 +122,14 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
 	cfg.baseDir = filepath.Dir(path)
+	for i := range cfg.Views {
+		cfg.Views[i].Source = "config.toml"
+	}
+	managed, err := loadViewsFile(ViewsPath(path))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Views = append(cfg.Views, managed...)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
