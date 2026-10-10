@@ -5,3 +5,9 @@
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Build output
+bin/
+
+# Superpowers plan workspaces
+.superpowers/

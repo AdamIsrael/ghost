@@ -1,0 +1,32 @@
+# Ghost configuration. Docs: docs/superpowers/specs/2026-10-09-ghost-design.md
+
+poll_interval = "5m"
+max_concurrent_reviews = 2
+max_daily_cost_usd = 10.0
+max_cost_per_review_usd = 1.5
+
+default_agent = "claude"
+
+[agents.claude]
+kind = "claude"
+model = "claude-opus-5-5"
+extra_args = []
+# The prompt that starts each review. Use `prompt = """..."""` inline or
+# `prompt_file` (relative to this file, or ~/...). Template variables:
+# {{.Repo}} {{.Number}} {{.Title}} {{.Author}} {{.Body}} {{.BaseRef}}
+# {{.HeadRef}} {{.HeadSHA}} {{.URL}} {{.ChangedFiles}}
+prompt_file = "prompts/default.md"
+
+[auto_approve]
+enabled = false
+require_confirm = true
+require_ci_green = true
+no_blocking_comments = true
+no_changes_requested = true
+max_changed_lines = 400
+
+# auto_review is off by default so nothing is spent until you opt in.
+[[view]]
+name = "Review requested"
+query = "is:open is:pr review-requested:@me"
+auto_review = false
