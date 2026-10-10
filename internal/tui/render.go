@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -12,6 +11,7 @@ import (
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/preflight"
+	"github.com/AdamIsrael/ghost/internal/textsafe"
 )
 
 var (
@@ -22,29 +22,8 @@ var (
 	errText   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 )
 
-// clean makes untrusted GitHub text safe to draw: CRLF becomes LF, tabs
-// expand, and every other control character is dropped — including ESC, so
-// PR text cannot inject terminal escape sequences, and CR, which would
-// redraw from the screen's left edge.
-func clean(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == '\n':
-			b.WriteRune(r)
-		case r == '\t':
-			b.WriteString("    ")
-		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r == utf8.RuneError:
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// cleanLine is clean for single-line fields: newlines become spaces.
-func cleanLine(s string) string { return strings.ReplaceAll(clean(s), "\n", " ") }
+// clean and cleanLine make untrusted GitHub text safe to draw.
+var clean, cleanLine = textsafe.Clean, textsafe.Line
 
 // fit truncates s with "…" and pads it to exactly w terminal cells.
 func fit(s string, w int) string {

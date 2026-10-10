@@ -30,7 +30,7 @@ type deps struct {
 	runTUI      func(tea.Model) error
 	openURL     func(string) error
 	getPR       func(ctx context.Context, repo string, number int) (github.PRDetail, error)
-	checkout    func(ctx context.Context, repo string, number int, baseRef, headSHA string) (string, func(), error)
+	checkout    func(ctx context.Context, repo string, number int, baseRef, headSHA string) (workspace.Workspace, func(), error)
 	newReviewer func(name string, a config.Agent) (agent.Reviewer, error)
 }
 

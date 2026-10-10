@@ -40,7 +40,7 @@ func argAfter(args []string, flag string) (string, bool) {
 func TestClaudeSuccess(t *testing.T) {
 	c, f := fakeClaude(t, "testdata/claude_success.json", nil)
 	r, _ := New("claude", config.Agent{Kind: "claude", Model: "claude-opus-5-5", ExtraArgs: []string{"--verbose"}}, f)
-	res, err := r.Review(context.Background(), ReviewRequest{Dir: "/wt", Prompt: "PROMPT", MaxCostUSD: 1.5})
+	res, err := r.Review(context.Background(), ReviewRequest{Dir: "/wt", ContextDir: "/ctx", Prompt: "PROMPT", MaxCostUSD: 1.5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,8 @@ func TestClaudeSuccess(t *testing.T) {
 		"--model":           "claude-opus-5-5",
 		"--max-budget-usd":  "1.50",
 		"--permission-mode": "dontAsk",
-		"--setting-sources": "user",
+		"--tools":           "Read,Grep,Glob",
+		"--add-dir":         "/ctx",
 		"--json-schema":     ResultSchema,
 	} {
 		if got, ok := argAfter(c.args, flag); !ok || got != want {
@@ -69,17 +70,25 @@ func TestClaudeSuccess(t *testing.T) {
 		}
 	}
 	joined := strings.Join(c.args, " ")
-	for _, want := range []string{"-p", "--strict-mcp-config", "--no-session-persistence", "Bash(git diff:*)", "--verbose"} {
+	for _, want := range []string{"-p", "--restricted", "--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--verbose"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args missing %q: %v", want, c.args)
 		}
 	}
-	for _, bad := range []string{"--bare", "--mcp-config", "Edit", "Write", "bypassPermissions"} {
+	for _, bad := range []string{"--bare", "--mcp-config", "--allowedTools", "--setting-sources", "bypassPermissions"} {
 		for _, a := range c.args {
 			if a == bad {
 				t.Errorf("args must not contain %q", bad)
 			}
 		}
+	}
+	for _, a := range c.args {
+		if a != ResultSchema && (strings.Contains(a, "Bash") || strings.Contains(a, "Edit") || strings.Contains(a, "Write")) {
+			t.Errorf("agent must have no shell or write tools, got arg %q", a)
+		}
+	}
+	if last := c.args[len(c.args)-2]; last != "--json-schema" {
+		t.Errorf("a non-variadic flag must come last (variadic --tools/--add-dir would swallow args), got %q", last)
 	}
 }
 
@@ -132,7 +141,7 @@ func TestClaudeOmitsOptionalFlags(t *testing.T) {
 	c, f := fakeClaude(t, "testdata/claude_success.json", nil)
 	r, _ := New("claude", config.Agent{Kind: "claude"}, f)
 	r.Review(context.Background(), ReviewRequest{Dir: "/wt", Prompt: "p"})
-	for _, flag := range []string{"--model", "--max-budget-usd"} {
+	for _, flag := range []string{"--model", "--max-budget-usd", "--add-dir"} {
 		if _, ok := argAfter(c.args, flag); ok {
 			t.Errorf("%s should be omitted when unset", flag)
 		}

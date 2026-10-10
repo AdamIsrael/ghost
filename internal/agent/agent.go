@@ -34,7 +34,8 @@ type ReviewResult struct {
 
 type ReviewRequest struct {
 	Dir        string  // PR worktree; the agent's working directory
-	Prompt     string  // operator prompt + OutputContract
+	ContextDir string  // Ghost-written review materials (diff, commits), outside Dir
+	Prompt     string  // BuildPrompt output
 	MaxCostUSD float64 // 0 = no per-review cap
 }
 
@@ -71,7 +72,15 @@ Do not modify any files.`
 // ResultSchema is passed to agents that support structured output.
 const ResultSchema = `{"type":"object","properties":{"summary":{"type":"string"},"verdict":{"type":"string","enum":["approve","comment","request_changes"]},"comments":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":1},"body":{"type":"string"},"severity":{"type":"string","enum":["blocking","nit"]}},"required":["path","line","body","severity"]}}},"required":["summary","verdict","comments"]}`
 
-func BuildPrompt(rendered string) string { return rendered + "\n\n" + OutputContract }
+// BuildPrompt appends Ghost's fixed sections to the operator's rendered
+// prompt: where the review materials are, then the output contract.
+func BuildPrompt(rendered, diffPath, commitsPath string) string {
+	materials := fmt.Sprintf(`## Review materials
+You cannot run commands. Your working directory is the repository at the PR head commit; explore it with Read, Grep and Glob.
+- Full diff against the base branch: %s
+- Commits in this PR: %s`, diffPath, commitsPath)
+	return rendered + "\n\n" + materials + "\n\n" + OutputContract
+}
 
 func (r ReviewResult) validate() error {
 	switch r.Verdict {

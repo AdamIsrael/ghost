@@ -10,10 +10,6 @@ import (
 	"github.com/AdamIsrael/ghost/internal/run"
 )
 
-// readOnlyTools is everything the reviewer may use. With --permission-mode
-// dontAsk, any other tool call is denied without prompting.
-var readOnlyTools = []string{"Read", "Grep", "Glob", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)"}
-
 type claude struct {
 	name string
 	cfg  config.Agent
@@ -31,12 +27,20 @@ func (c *claude) args(req ReviewRequest) []string {
 		"-p",
 		"--output-format", "json",
 		"--no-session-persistence",
-		// The worktree is untrusted PR content: never load its settings
-		// (hooks run arbitrary commands) or its MCP servers.
-		"--setting-sources", "user",
+		// The worktree is untrusted PR content. --restricted removes every
+		// command-running tool, ignores user/project/local settings, and
+		// confines file tools to the working directories; --safe-mode skips
+		// CLAUDE.md, skills, plugins and hooks; no MCP servers start; and
+		// dontAsk denies anything not already allowed. The agent can only
+		// read the worktree and the context dir.
+		"--restricted",
+		"--safe-mode",
 		"--strict-mcp-config",
 		"--permission-mode", "dontAsk",
-		"--json-schema", ResultSchema,
+		"--tools", "Read,Grep,Glob",
+	}
+	if req.ContextDir != "" {
+		args = append(args, "--add-dir", req.ContextDir)
 	}
 	if c.cfg.Model != "" {
 		args = append(args, "--model", c.cfg.Model)
@@ -45,8 +49,8 @@ func (c *claude) args(req ReviewRequest) []string {
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", req.MaxCostUSD))
 	}
 	args = append(args, c.cfg.ExtraArgs...)
-	// --allowedTools is variadic, so it goes last.
-	return append(args, append([]string{"--allowedTools"}, readOnlyTools...)...)
+	// --tools and --add-dir are variadic; a single-value flag must come last.
+	return append(args, "--json-schema", ResultSchema)
 }
 
 type claudeOutput struct {

@@ -2,8 +2,8 @@ You are reviewing pull request {{.Repo}}#{{.Number}}: "{{.Title}}" by @{{.Author
 URL: {{.URL}}
 
 The repository is checked out at the PR head commit ({{.HeadSHA}}) in your working directory.
-The PR merges {{.HeadRef}} into {{.BaseRef}}. See the change with:
-  git diff origin/{{.BaseRef}}...HEAD
+The PR merges {{.HeadRef}} into {{.BaseRef}}. The full diff and commit list are
+listed under "Review materials" below.
 
 Changed files:
 {{range .ChangedFiles}}- {{.}}

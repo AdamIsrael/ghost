@@ -11,6 +11,7 @@ import (
 	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/github"
+	"github.com/AdamIsrael/ghost/internal/workspace"
 )
 
 type fakeReviewer struct {
@@ -49,9 +50,10 @@ func newReviewHarness(t *testing.T, extraConfig string) (*reviewHarness, deps) {
 	d.getPR = func(_ context.Context, repo string, n int) (github.PRDetail, error) {
 		return github.PRDetail{PR: github.PR{Repo: repo, Number: n, Title: "Fix parser", BaseRef: "main", HeadSHA: "deadbeef"}, Files: []string{"parser.go"}}, nil
 	}
-	d.checkout = func(_ context.Context, repo string, n int, base, sha string) (string, func(), error) {
+	d.checkout = func(_ context.Context, repo string, n int, base, sha string) (workspace.Workspace, func(), error) {
 		h.checkedOut = true
-		return "/tmp/wt", func() { h.cleaned = true }, nil
+		return workspace.Workspace{Dir: "/tmp/wt", ContextDir: "/tmp/ctx", DiffPath: "/tmp/ctx/diff.patch", CommitsPath: "/tmp/ctx/commits.txt"},
+			func() { h.cleaned = true }, nil
 	}
 	d.newReviewer = func(name string, a config.Agent) (agent.Reviewer, error) {
 		h.agentName = name
@@ -75,10 +77,10 @@ func TestReviewDryRun(t *testing.T) {
 	if !h.checkedOut || !h.cleaned {
 		t.Error("worktree not checked out and cleaned up")
 	}
-	if h.rev.got.Dir != "/tmp/wt" || h.rev.got.MaxCostUSD != 1.5 {
+	if h.rev.got.Dir != "/tmp/wt" || h.rev.got.ContextDir != "/tmp/ctx" || h.rev.got.MaxCostUSD != 1.5 {
 		t.Errorf("request = %+v", h.rev.got)
 	}
-	if !strings.Contains(h.rev.got.Prompt, "o/r#7") || !strings.HasSuffix(h.rev.got.Prompt, agent.OutputContract) {
+	if !strings.Contains(h.rev.got.Prompt, "o/r#7") || !strings.Contains(h.rev.got.Prompt, "/tmp/ctx/diff.patch") || !strings.HasSuffix(h.rev.got.Prompt, agent.OutputContract) {
 		t.Errorf("prompt not rendered with contract:\n%s", h.rev.got.Prompt)
 	}
 	if h.agentName != "claude" {
@@ -143,5 +145,18 @@ func TestReviewArgErrors(t *testing.T) {
 	}
 	if h.checkedOut {
 		t.Error("bad args should fail before checkout")
+	}
+}
+
+func TestReviewOutputIsSanitized(t *testing.T) {
+	h, d := newReviewHarness(t, "")
+	h.rev.res = agent.ReviewResult{Verdict: agent.Comment, Summary: "ok\r\x1b]52;c;ZXZpbA==\x07", CostUSD: 0.1,
+		Comments: []agent.InlineComment{{Path: "a\x1b[8m.go", Line: 1, Body: "b\x9b", Severity: "nit"}}}
+	var out, errb bytes.Buffer
+	if code := run([]string{"--config", h.cfg, "review", "o/r#7", "--dry-run"}, &out, &errb, d); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if strings.ContainsAny(out.String(), "\r\x1b\x07") || strings.Contains(out.String(), "\u009b") {
+		t.Errorf("control characters reached the terminal: %q", out.String())
 	}
 }

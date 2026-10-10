@@ -56,11 +56,12 @@ func TestCheckoutAtHeadWithBaseRef(t *testing.T) {
 	rdir, head := remote(t)
 	var clones int32
 	m := New(t.TempDir(), fakeGh(rdir, &clones))
-	dir, cleanup, err := m.Checkout(context.Background(), "o/r", 7, "main", head)
+	ws, cleanup, err := m.Checkout(context.Background(), "o/r", 7, "main", head)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cleanup()
+	dir := ws.Dir
 	if got := git(t, dir, "rev-parse", "HEAD"); got != head {
 		t.Errorf("HEAD = %s, want %s", got, head)
 	}
@@ -93,14 +94,17 @@ func TestCleanupRemovesWorktree(t *testing.T) {
 	var clones int32
 	root := t.TempDir()
 	m := New(root, fakeGh(rdir, &clones))
-	dir, cleanup, err := m.Checkout(context.Background(), "o/r", 7, "main", head)
+	ws, cleanup, err := m.Checkout(context.Background(), "o/r", 7, "main", head)
 	if err != nil {
 		t.Fatal(err)
 	}
+	dir := ws.Dir
 	cleanup()
 	cleanup() // idempotent
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Errorf("worktree dir still exists: %v", err)
+	for _, p := range []string{dir, ws.ContextDir} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s still exists: %v", p, err)
+		}
 	}
 	if list := git(t, filepath.Join(root, "repos", "o", "r.git"), "worktree", "list"); strings.Contains(list, dir) {
 		t.Errorf("worktree still registered:\n%s", list)
@@ -153,5 +157,52 @@ func TestCheckoutRejectsBadRepo(t *testing.T) {
 			cleanup()
 			t.Errorf("repo %q should be rejected", repo)
 		}
+	}
+}
+
+func TestCheckoutWritesReviewContext(t *testing.T) {
+	rdir, head := remote(t)
+	var clones int32
+	m := New(t.TempDir(), fakeGh(rdir, &clones))
+	ws, cleanup, err := m.Checkout(context.Background(), "o/r", 7, "main", head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if rel, err := filepath.Rel(ws.Dir, ws.ContextDir); err == nil && !strings.HasPrefix(rel, "..") {
+		t.Errorf("context dir %s must be outside the worktree %s (a PR could plant files there)", ws.ContextDir, ws.Dir)
+	}
+	if filepath.Dir(ws.DiffPath) != ws.ContextDir || filepath.Dir(ws.CommitsPath) != ws.ContextDir {
+		t.Errorf("context files not in context dir: %+v", ws)
+	}
+	diff, _ := os.ReadFile(ws.DiffPath)
+	if !strings.Contains(string(diff), "-one") || !strings.Contains(string(diff), "+two") {
+		t.Errorf("diff.patch = %q", diff)
+	}
+	commits, _ := os.ReadFile(ws.CommitsPath)
+	if !strings.Contains(string(commits), "change") || strings.Contains(string(commits), "base") {
+		t.Errorf("commits.txt should list only PR commits: %q", commits)
+	}
+}
+
+func TestReviewContextDisablesDiffDrivers(t *testing.T) {
+	rdir, head := remote(t)
+	var clones int32
+	var diffArgs []string
+	inner := fakeGh(rdir, &clones)
+	rec := func(ctx context.Context, dir, stdin, name string, args ...string) ([]byte, []byte, error) {
+		if name == "git" && len(args) > 0 && args[0] == "diff" {
+			diffArgs = args
+		}
+		return inner(ctx, dir, stdin, name, args...)
+	}
+	_, cleanup, err := New(t.TempDir(), rec).Checkout(context.Background(), "o/r", 7, "main", head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	joined := strings.Join(diffArgs, " ")
+	if !strings.Contains(joined, "--no-ext-diff") || !strings.Contains(joined, "--no-textconv") {
+		t.Errorf("git diff must disable external diff drivers and textconv: %v", diffArgs)
 	}
 }

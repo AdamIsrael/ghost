@@ -51,41 +51,88 @@ func validRepo(repo string) bool {
 	return ok && !bad(owner) && !bad(name)
 }
 
-// Checkout fetches PR number's head and baseRef into the repo's bare clone and
-// adds a detached worktree at headSHA. origin/<baseRef> is available inside it.
-// cleanup removes the worktree; it is always non-nil and idempotent.
-func (m *Manager) Checkout(ctx context.Context, repo string, number int, baseRef, headSHA string) (string, func(), error) {
+// Workspace is one review's checkout.
+type Workspace struct {
+	Dir         string // worktree at the PR head
+	ContextDir  string // Ghost-written review materials; outside Dir so PR content can't touch it
+	DiffPath    string // full diff against origin/<base>
+	CommitsPath string // commits in the PR
+}
+
+// Checkout fetches PR number's head and baseRef into the repo's bare clone,
+// adds a detached worktree at headSHA, and writes the diff and commit list
+// into a separate context dir. cleanup removes both; it is always non-nil and
+// idempotent.
+func (m *Manager) Checkout(ctx context.Context, repo string, number int, baseRef, headSHA string) (Workspace, func(), error) {
 	noop := func() {}
 	if !validRepo(repo) {
-		return "", noop, fmt.Errorf("invalid repo %q", repo)
+		return Workspace{}, noop, fmt.Errorf("invalid repo %q", repo)
 	}
 	bare := filepath.Join(m.root, "repos", repo+".git")
 
 	lock := m.repoLock(repo)
 	lock.Lock()
 	err := m.prepare(ctx, repo, bare, number, baseRef)
-	var dir string
+	var ws Workspace
 	if err == nil {
-		dir, err = m.addWorktree(ctx, bare, headSHA)
+		ws.Dir, err = m.addWorktree(ctx, bare, headSHA)
 	}
 	lock.Unlock()
 	if err != nil {
-		return "", noop, err
+		return Workspace{}, noop, err
 	}
 
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
+			if ws.ContextDir != "" {
+				os.RemoveAll(ws.ContextDir)
+			}
 			l := m.repoLock(repo)
 			l.Lock()
 			defer l.Unlock()
-			if m.git(context.Background(), bare, "worktree", "remove", "--force", dir) != nil {
-				os.RemoveAll(dir)
+			if m.git(context.Background(), bare, "worktree", "remove", "--force", ws.Dir) != nil {
+				os.RemoveAll(ws.Dir)
 				m.git(context.Background(), bare, "worktree", "prune")
 			}
 		})
 	}
-	return dir, cleanup, nil
+	if err := m.writeContext(ctx, &ws, baseRef); err != nil {
+		cleanup()
+		return Workspace{}, noop, err
+	}
+	return ws, cleanup, nil
+}
+
+// writeContext stores the PR's diff and commit list for an agent that cannot
+// run commands. External diff drivers and textconv are disabled so the
+// user's git config can't run programs on PR content.
+func (m *Manager) writeContext(ctx context.Context, ws *Workspace, baseRef string) error {
+	dir, err := os.MkdirTemp(filepath.Join(m.root, "worktrees"), "context-")
+	if err != nil {
+		return err
+	}
+	ws.ContextDir = dir
+	ws.DiffPath = filepath.Join(dir, "diff.patch")
+	ws.CommitsPath = filepath.Join(dir, "commits.txt")
+	base := "origin/" + baseRef
+	outputs := []struct {
+		path string
+		args []string
+	}{
+		{ws.DiffPath, []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", base + "...HEAD"}},
+		{ws.CommitsPath, []string{"log", "--no-color", "--format=commit %H%nAuthor: %an%n%n%B", base + "..HEAD"}},
+	}
+	for _, o := range outputs {
+		out, errOut, err := m.run(ctx, ws.Dir, "", "git", o.args...)
+		if err != nil {
+			return fmt.Errorf("git %s: %w: %s", o.args[0], err, strings.TrimSpace(string(errOut)))
+		}
+		if err := os.WriteFile(o.path, out, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Manager) prepare(ctx context.Context, repo, bare string, number int, baseRef string) error {

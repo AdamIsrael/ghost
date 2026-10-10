@@ -11,6 +11,7 @@ import (
 	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/github"
+	"github.com/AdamIsrael/ghost/internal/textsafe"
 )
 
 func runReview(cfgPath string, args []string, stdout, stderr io.Writer, d deps) int {
@@ -65,13 +66,13 @@ func runReview(cfgPath string, args []string, stdout, stderr io.Writer, d deps) 
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
-	prompt, err := renderReviewPrompt(&cfg, name, pr)
+	rendered, err := renderReviewPrompt(&cfg, name, pr)
 	if err != nil {
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
 	if *showPrompt {
-		fmt.Fprintln(stdout, prompt)
+		fmt.Fprintln(stdout, textsafe.Clean(agent.BuildPrompt(rendered, "<context>/diff.patch", "<context>/commits.txt")))
 		return 0
 	}
 
@@ -81,16 +82,21 @@ func runReview(cfgPath string, args []string, stdout, stderr io.Writer, d deps) 
 		return 1
 	}
 	fmt.Fprintf(stderr, "Checking out %s#%d at %.7s…\n", repo, number, pr.HeadSHA)
-	dir, cleanup, err := d.checkout(ctx, repo, number, pr.BaseRef, pr.HeadSHA)
+	ws, cleanup, err := d.checkout(ctx, repo, number, pr.BaseRef, pr.HeadSHA)
 	defer cleanup()
 	if err != nil {
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
 	fmt.Fprintf(stderr, "Running %s (cap $%.2f)…\n", name, cfg.MaxCostPerReviewUSD)
-	res, err := reviewer.Review(ctx, agent.ReviewRequest{Dir: dir, Prompt: prompt, MaxCostUSD: cfg.MaxCostPerReviewUSD})
+	res, err := reviewer.Review(ctx, agent.ReviewRequest{
+		Dir:        ws.Dir,
+		ContextDir: ws.ContextDir,
+		Prompt:     agent.BuildPrompt(rendered, ws.DiffPath, ws.CommitsPath),
+		MaxCostUSD: cfg.MaxCostPerReviewUSD,
+	})
 	if err != nil {
-		fmt.Fprintf(stderr, "ghost: review failed after spending $%.2f: %v\n", res.CostUSD, err)
+		fmt.Fprintf(stderr, "ghost: review failed after spending $%.2f: %v\n", res.CostUSD, textsafe.Line(err.Error()))
 		return 1
 	}
 	printReview(stdout, pr, name, res)
@@ -110,18 +116,20 @@ func renderReviewPrompt(cfg *config.Config, agentName string, pr github.PRDetail
 	if err != nil {
 		return "", fmt.Errorf("agents.%s prompt: %w", agentName, err)
 	}
-	return agent.BuildPrompt(rendered), nil
+	return rendered, nil
 }
 
+// printReview writes the review to the terminal. PR text and agent output
+// are untrusted, so everything is passed through textsafe.
 func printReview(w io.Writer, pr github.PRDetail, agentName string, res agent.ReviewResult) {
-	fmt.Fprintf(w, "%s#%d  %s\n", pr.Repo, pr.Number, pr.Title)
-	fmt.Fprintf(w, "Agent: %s   Verdict: %s   Cost: $%.2f\n\n", agentName, res.Verdict, res.CostUSD)
-	fmt.Fprintf(w, "%s\n\n", res.Summary)
+	fmt.Fprintf(w, "%s#%d  %s\n", textsafe.Line(pr.Repo), pr.Number, textsafe.Line(pr.Title))
+	fmt.Fprintf(w, "Agent: %s   Verdict: %s   Cost: $%.2f\n\n", agentName, textsafe.Line(string(res.Verdict)), res.CostUSD)
+	fmt.Fprintf(w, "%s\n\n", textsafe.Clean(res.Summary))
 	if len(res.Comments) == 0 {
 		fmt.Fprintln(w, "No inline comments.")
 	}
 	for _, c := range res.Comments {
-		fmt.Fprintf(w, "%s:%d [%s]\n  %s\n", c.Path, c.Line, c.Severity, c.Body)
+		fmt.Fprintf(w, "%s:%d [%s]\n  %s\n", textsafe.Line(c.Path), c.Line, textsafe.Line(c.Severity), textsafe.Clean(c.Body))
 	}
 	fmt.Fprintln(w, "\n(dry run: nothing was posted to GitHub)")
 }
