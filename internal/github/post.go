@@ -138,3 +138,18 @@ func IsClientError(err error) bool {
 	var h *api.HTTPError
 	return errors.As(err, &h) && h.StatusCode >= 400 && h.StatusCode < 500
 }
+
+// Approve submits an APPROVE review on commitID. Unlike PostReview it never
+// falls back: if GitHub refuses (for example, your own pull request), the
+// approval simply failed.
+func (c *Client) Approve(ctx context.Context, repo string, number int, commitID, body string) error {
+	path := fmt.Sprintf("repos/%s/pulls/%d/reviews", repo, number)
+	err := c.post(ctx, path, ReviewPost{CommitID: commitID, Event: "APPROVE", Body: body})
+	if ownPR(err) {
+		return fmt.Errorf("approve: GitHub does not allow approving your own pull request: %w", err)
+	}
+	if err != nil {
+		return fmt.Errorf("approve: %w", err)
+	}
+	return nil
+}

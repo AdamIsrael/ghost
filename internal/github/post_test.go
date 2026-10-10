@@ -153,3 +153,29 @@ func TestIsClientError(t *testing.T) {
 		}
 	}
 }
+
+func TestApprove(t *testing.T) {
+	f := &fakeREST{}
+	if err := New(nil).WithREST(f).Approve(context.Background(), "o/r", 7, "abc", "Approved"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) != 1 || f.calls[0].path != "repos/o/r/pulls/7/reviews" {
+		t.Fatalf("calls = %+v", f.calls)
+	}
+	if b := f.calls[0].body; b.Event != "APPROVE" || b.CommitID != "abc" || b.Body != "Approved" || len(b.Comments) != 0 {
+		t.Errorf("body = %+v", b)
+	}
+}
+
+func TestApproveOwnPRIsAnError(t *testing.T) {
+	own := &api.HTTPError{StatusCode: 422, Message: "Unprocessable Entity",
+		Errors: []api.HTTPErrorItem{{Message: "Review Can not approve your own pull request"}}}
+	f := &fakeREST{errs: []error{own}}
+	err := New(nil).WithREST(f).Approve(context.Background(), "o/r", 7, "abc", "Approved")
+	if err == nil || !strings.Contains(err.Error(), "own pull request") || !IsClientError(err) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.calls) != 1 {
+		t.Errorf("approval must never be retried as a comment (%d calls)", len(f.calls))
+	}
+}
