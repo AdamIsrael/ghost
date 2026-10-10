@@ -79,20 +79,20 @@ func TestFormAgentCycleIncludesDefault(t *testing.T) {
 func TestFormRender(t *testing.T) {
 	f := newViewForm(config.View{Name: "Team", Query: "is:pr"}, "Team", nil)
 	f.err = "query is required"
-	out := ansi.Strip(f.render(80, 12))
+	out := ansi.Strip(f.render(testStyles, 80, 12))
 	for _, want := range []string{"Edit view", "Name", "Query", "Auto-review", "Agent", "(default)", "query is required", "enter save", "esc cancel"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q:\n%s", want, out)
 		}
 	}
-	if !strings.Contains(ansi.Strip(newViewForm(config.View{}, "", nil).render(80, 12)), "New view") {
+	if !strings.Contains(ansi.Strip(newViewForm(config.View{}, "", nil).render(testStyles, 80, 12)), "New view") {
 		t.Error("new form title missing")
 	}
 }
 
 func TestFormFieldsFitWidth(t *testing.T) {
 	f := newViewForm(config.View{Name: "cli", Query: "repo:cli/cli is:open is:pr"}, "", nil)
-	for _, line := range strings.Split(ansi.Strip(f.render(150, 12)), "\n") {
+	for _, line := range strings.Split(ansi.Strip(f.render(testStyles, 150, 12)), "\n") {
 		if strings.HasSuffix(strings.TrimRight(line, " "), "…") {
 			t.Errorf("field overflows and is truncated: %q", line)
 		}

@@ -17,6 +17,7 @@ import (
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/poller"
 	"github.com/AdamIsrael/ghost/internal/preflight"
+	"github.com/AdamIsrael/ghost/internal/theme"
 )
 
 type Options struct {
@@ -32,6 +33,7 @@ type Options struct {
 	Theme           string                    // config theme; "" = dark
 	NoColor         bool                      // NO_COLOR set: force mono
 	ConfigPath      string                    // shown when suggesting a theme setting
+	Themes          *theme.Registry           // available themes; nil = built-ins only
 	Agents          []string                  // agent names for the view form
 }
 
@@ -60,7 +62,9 @@ type Model struct {
 	snap     engine.Snapshot // cached; refreshed on updates, never in View
 	prState  engine.PRState  // selected PR's state, cached likewise
 
-	theme     Theme
+	themes    *theme.Registry
+	palette   theme.Palette
+	sty       styles
 	autoTheme bool // follow the terminal background until t is pressed
 
 	views         []config.View // owned copy; edited with n/e/d
@@ -95,26 +99,36 @@ func waitForChange(e Engine) tea.Cmd {
 func New(o Options) Model {
 	m := Model{opts: o, prs: map[string][]github.PR{}, errs: map[string]error{},
 		views: append([]config.View(nil), o.Views...)}
-	m.theme, m.autoTheme = resolveTheme(o)
+	m.themes = o.Themes
+	if m.themes == nil {
+		m.themes, _ = theme.Load("") // built-ins are embedded and tested
+	}
+	p, auto := resolvePalette(o, m.themes)
+	m.setPalette(p)
+	m.autoTheme = auto
 	return m
 }
 
-// resolveTheme picks the starting theme: mono under NO_COLOR, the named
-// theme, or dark (provisionally, for "auto") otherwise.
-func resolveTheme(o Options) (Theme, bool) {
+// resolvePalette picks the starting theme: mono under NO_COLOR, a neutral
+// palette for "auto" (until the terminal reports its background), the named
+// theme, or dark.
+func resolvePalette(o Options, themes *theme.Registry) (theme.Palette, bool) {
 	if o.NoColor {
-		t, _ := themeByName("mono")
-		return t, false
-	}
-	if t, ok := themeByName(o.Theme); ok && o.Theme != "auto" {
-		return t, false
+		p, _ := themes.Get("mono")
+		return p, false
 	}
 	if o.Theme == "auto" {
-		t, _ := themeByName("auto")
-		return t, true
+		return theme.Palette{ID: "auto", Name: "Auto"}, true
 	}
-	t, _ := themeByName("dark")
-	return t, false
+	if p, ok := themes.Get(o.Theme); ok {
+		return p, false
+	}
+	p, _ := themes.Get("dark")
+	return p, false
+}
+
+func (m *Model) setPalette(p theme.Palette) {
+	m.palette, m.sty = p, newStyles(p)
 }
 
 func (m Model) Init() tea.Cmd {
@@ -244,7 +258,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !msg.IsDark() {
 				name = "light"
 			}
-			m.theme, _ = themeByName(name)
+			if p, ok := m.themes.Get(name); ok {
+				m.setPalette(p)
+			}
 		}
 	case tea.PasteMsg:
 		if m.form != nil {
@@ -323,9 +339,10 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 			m.flash = "NO_COLOR is set, so colors are off; unset it to use themes"
 			return m, nil
 		}
-		i := slices.Index(themeOrder, m.theme.Name)
-		next := themeOrder[(i+1)%len(themeOrder)]
-		m.theme, _ = themeByName(next)
+		ids := m.themes.IDs()
+		next := ids[(slices.Index(ids, m.palette.ID)+1)%len(ids)]
+		p, _ := m.themes.Get(next)
+		m.setPalette(p)
 		m.autoTheme = false
 		where := m.opts.ConfigPath
 		if where == "" {
@@ -367,6 +384,7 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	v.BackgroundColor, v.ForegroundColor = m.sty.background, m.sty.foreground
 	return v
 }
 
@@ -412,7 +430,6 @@ func (m Model) statusErr() string {
 const minDetailWidth = 30
 
 func (m Model) render() string {
-	m.theme.apply()
 	if m.width <= 0 || m.height <= 0 {
 		return "Loading…"
 	}
@@ -420,7 +437,7 @@ func (m Model) render() string {
 	for name, prs := range m.prs {
 		counts[name] = len(prs)
 	}
-	top := renderFilterBar(m.views, m.active, counts, m.width)
+	top := m.sty.renderFilterBar(m.views, m.active, counts, m.width)
 	si := statusInfo{
 		MaxDailyUSD: m.opts.MaxDailyCostUSD,
 		LastPoll:    m.lastPoll,
@@ -433,25 +450,25 @@ func (m Model) render() string {
 		si.SpendUSD, si.MaxDailyUSD = snap.SpendTodayUSD, snap.MaxDailyUSD
 		si.Running, si.Queued, si.Paused, si.BudgetPaused = snap.Running, snap.Queued, snap.Paused, snap.BudgetPaused
 	}
-	bottom := renderStatusBar(si, m.width)
+	bottom := m.sty.renderStatusBar(si, m.width)
 	bodyH := m.height - 2
 	if bodyH < 1 {
 		return top
 	}
 	if m.form != nil {
-		return lipgloss.JoinVertical(lipgloss.Left, top, m.form.render(m.width, bodyH), bottom)
+		return lipgloss.JoinVertical(lipgloss.Left, top, m.form.render(m.sty, m.width, bodyH), bottom)
 	}
 
 	listW := max(m.width*2/5, 20)
 	detailW := m.width - listW - 1
 	if detailW < minDetailWidth {
-		list := renderList(m.currentPRs(), m.cursor, m.width, bodyH, m.emptyMessage())
+		list := m.sty.renderList(m.currentPRs(), m.cursor, m.width, bodyH, m.emptyMessage())
 		return lipgloss.JoinVertical(lipgloss.Left, top, list, bottom)
 	}
-	list := renderList(m.currentPRs(), m.cursor, listW, bodyH, m.emptyMessage())
+	list := m.sty.renderList(m.currentPRs(), m.cursor, listW, bodyH, m.emptyMessage())
 	sep := strings.TrimSuffix(strings.Repeat("│\n", bodyH), "\n")
-	detail := renderDetail(m.selectedPR(), st, detailW, bodyH)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, list, dim.Render(sep), detail)
+	detail := m.sty.renderDetail(m.selectedPR(), st, detailW, bodyH)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, list, m.sty.border.Render(sep), detail)
 	return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
 }
 

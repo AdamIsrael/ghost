@@ -111,7 +111,7 @@ func (f viewForm) update(msg tea.KeyPressMsg) (viewForm, formAction, tea.Cmd) {
 	return f, formNone, cmd
 }
 
-func (f viewForm) render(width, height int) string {
+func (f viewForm) render(sty styles, width, height int) string {
 	title := "New view"
 	if f.editing != "" {
 		title = fmt.Sprintf("Edit view %q", f.editing)
@@ -133,7 +133,7 @@ func (f viewForm) render(width, height int) string {
 		agent = "(default)"
 	}
 	ls := []string{
-		bold.Render("── " + title + " ──"),
+		sty.heading.Render("── " + title + " ──"),
 		"",
 		marker(fieldName) + "Name        " + f.name.View(),
 		marker(fieldQuery) + "Query       " + f.query.View(),
@@ -142,9 +142,9 @@ func (f viewForm) render(width, height int) string {
 		"",
 	}
 	if f.err != "" {
-		ls = append(ls, errText.Render("✗ "+cleanLine(f.err)), "")
+		ls = append(ls, sty.err.Render("✗ "+cleanLine(f.err)), "")
 	}
-	ls = append(ls, dim.Render("tab next field · space toggle · ←/→ agent · enter save · esc cancel"))
+	ls = append(ls, sty.muted.Render("tab next field · space toggle · ←/→ agent · enter save · esc cancel"))
 	return block(ls, width, height)
 }
 

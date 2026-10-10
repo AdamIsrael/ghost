@@ -6,62 +6,31 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
+	"github.com/AdamIsrael/ghost/internal/theme"
 )
 
-func noColor(c color.Color) bool {
-	if c == nil {
-		return true
-	}
-	_, ok := c.(lipgloss.NoColor)
-	return ok
-}
-
-func TestDarkThemeMutedIsReadable(t *testing.T) {
-	th, _ := themeByName("dark")
-	if fg := th.Muted.GetForeground(); noColor(fg) || fg == lipgloss.Color("8") {
-		t.Errorf("dark muted foreground = %v; ANSI 8 is hard to read on dark backgrounds", fg)
-	}
-}
-
-func TestMonoHasNoColors(t *testing.T) {
-	th, _ := themeByName("mono")
-	for name, st := range map[string]lipgloss.Style{"muted": th.Muted, "error": th.Error, "heading": th.Heading, "selected": th.Selected, "tab": th.ActiveTab} {
-		if !noColor(st.GetForeground()) || !noColor(st.GetBackground()) {
-			t.Errorf("mono %s has a color", name)
-		}
-	}
-}
-
-func themeOf(m tea.Model) string { return m.(Model).theme.Name }
+func themeOf(m tea.Model) string { return m.(Model).palette.ID }
 
 func TestThemeFromOptions(t *testing.T) {
-	if got := themeOf(New(Options{Theme: "high-contrast"})); got != "high-contrast" {
-		t.Errorf("theme = %q", got)
+	cases := map[string]Options{
+		"tokyo-night": {Theme: "tokyo-night"},
+		"mono":        {Theme: "light", NoColor: true},
+		"dark":        {},
+		"auto":        {Theme: "auto"},
 	}
-	if got := themeOf(New(Options{Theme: "light", NoColor: true})); got != "mono" {
-		t.Errorf("NO_COLOR must force mono, got %q", got)
+	for want, o := range cases {
+		if got := themeOf(New(o)); got != want {
+			t.Errorf("%+v → %q, want %q", o, got, want)
+		}
 	}
-	if got := themeOf(New(Options{})); got != "dark" {
-		t.Errorf("default theme = %q, want dark", got)
+	if m := New(Options{Theme: "auto"}); m.sty.muted.GetForeground() != nil && !noColor(m.sty.muted.GetForeground()) {
+		t.Error("auto must stay neutral until the terminal answers")
 	}
-}
-
-// keepDefaultTheme restores the package styles after a test that renders.
-func keepDefaultTheme(t *testing.T) {
-	t.Cleanup(func() {
-		th, _ := themeByName("dark")
-		th.apply()
-	})
 }
 
 func TestAutoThemeFollowsBackground(t *testing.T) {
 	m := tea.Model(New(Options{Theme: "auto"}))
-	if themeOf(m) != "auto" || !noColor(m.(Model).theme.Muted.GetForeground()) {
-		t.Fatalf("until the terminal answers, auto must be readable on any background: %q %v",
-			themeOf(m), m.(Model).theme.Muted.GetForeground())
-	}
 	m, _ = m.Update(tea.BackgroundColorMsg{Color: color.White})
 	if themeOf(m) != "light" {
 		t.Fatalf("light background → %q", themeOf(m))
@@ -70,23 +39,27 @@ func TestAutoThemeFollowsBackground(t *testing.T) {
 	if themeOf(m) != "dark" {
 		t.Fatalf("dark background → %q", themeOf(m))
 	}
-	fixed := tea.Model(New(Options{Theme: "high-contrast"}))
+	fixed := tea.Model(New(Options{Theme: "nord"}))
 	fixed, _ = fixed.Update(tea.BackgroundColorMsg{Color: color.White})
-	if themeOf(fixed) != "high-contrast" {
+	if themeOf(fixed) != "nord" {
 		t.Error("an explicit theme must ignore the terminal background")
 	}
 }
 
-func TestThemeKeyCycles(t *testing.T) {
-	keepDefaultTheme(t)
-	m := send(t, New(Options{Views: twoViews, Theme: "dark", ConfigPath: "/home/me/.config/ghost/config.toml"}), tea.WindowSizeMsg{Width: 200, Height: 10})
+func TestThemeKeyCyclesAllThemes(t *testing.T) {
+	dir := t.TempDir()
+	writeUserTheme(t, dir, "zz-mine", "accent = \"5\"\n")
+	reg, err := theme.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := send(t, New(Options{Views: twoViews, Theme: "solarized-light", Themes: reg, ConfigPath: "/c/config.toml"}),
+		tea.WindowSizeMsg{Width: 220, Height: 10})
 	m = send(t, m, key("t"))
-	if themeOf(m) != "light" || !strings.Contains(screen(m), `theme = "light"`) || !strings.Contains(screen(m), "/home/me/.config/ghost/config.toml") {
-		t.Fatalf("theme %q screen:\n%s", themeOf(m), screen(m))
+	if themeOf(m) != "zz-mine" || !strings.Contains(screen(m), `theme = "zz-mine"`) || !strings.Contains(screen(m), "/c/config.toml") {
+		t.Fatalf("after solarized-light: %q\n%s", themeOf(m), screen(m))
 	}
-	for i := 0; i < 3; i++ {
-		m = send(t, m, key("t"))
-	}
+	m = send(t, m, key("t"))
 	if themeOf(m) != "dark" {
 		t.Errorf("cycle should wrap to dark, got %q", themeOf(m))
 	}
@@ -96,26 +69,28 @@ func TestThemeKeyCycles(t *testing.T) {
 	}
 }
 
-func TestThemeChangesRenderedOutput(t *testing.T) {
-	keepDefaultTheme(t)
-	dark := send(t, New(Options{Views: twoViews, Theme: "dark"}), tea.WindowSizeMsg{Width: 120, Height: 10}).View().Content
-	mono := send(t, New(Options{Views: twoViews, Theme: "mono"}), tea.WindowSizeMsg{Width: 120, Height: 10}).View().Content
-	if dark == mono {
-		t.Error("themes should render differently")
-	}
-}
-
-func TestHighContrastMutedReadableOnAnyBackground(t *testing.T) {
-	th, _ := themeByName("high-contrast")
-	if !noColor(th.Muted.GetForeground()) {
-		t.Errorf("high-contrast muted must use the terminal's own foreground, got %v", th.Muted.GetForeground())
-	}
-}
-
 func TestThemeKeyUnderNoColor(t *testing.T) {
-	keepDefaultTheme(t)
 	m := send(t, New(Options{Views: twoViews, NoColor: true}), tea.WindowSizeMsg{Width: 160, Height: 10}, key("t"))
 	if themeOf(m) != "mono" || !strings.Contains(screen(m), "NO_COLOR") {
 		t.Errorf("theme %q screen:\n%s", themeOf(m), screen(m))
+	}
+}
+
+func TestThemeSetsViewColors(t *testing.T) {
+	v := send(t, New(Options{Views: twoViews, Theme: "tokyo-night"}), tea.WindowSizeMsg{Width: 120, Height: 10}).View()
+	if v.BackgroundColor == nil || v.ForegroundColor == nil {
+		t.Error("a theme with a background must set the view colors")
+	}
+	v = send(t, New(Options{Views: twoViews, Theme: "dark"}), tea.WindowSizeMsg{Width: 120, Height: 10}).View()
+	if v.BackgroundColor != nil || v.ForegroundColor != nil {
+		t.Error("a terminal-palette theme must leave the terminal's colors alone")
+	}
+}
+
+func TestThemesRenderDifferently(t *testing.T) {
+	a := send(t, New(Options{Views: twoViews, Theme: "dark"}), tea.WindowSizeMsg{Width: 120, Height: 10}).View().Content
+	b := send(t, New(Options{Views: twoViews, Theme: "mono"}), tea.WindowSizeMsg{Width: 120, Height: 10}).View().Content
+	if a == b {
+		t.Error("themes should render differently")
 	}
 }
