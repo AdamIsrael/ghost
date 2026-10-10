@@ -72,7 +72,7 @@ func TestEditView(t *testing.T) {
 		t.Fatalf("edit form not shown:\n%s", screen(m))
 	}
 	m = sendKeys(m, tab, tea.KeyPressMsg{Code: tea.KeyEnd})
-	m = sendKeys(m, append(typed(" is:open"), enter)...)
+	sendKeys(m, append(typed(" is:open"), enter)...)
 	if len(s.saved) != 1 || s.saved[0][1].Query != "q1 is:open" || s.saved[0][1].Name != "Team" || len(s.saved[0]) != 2 {
 		t.Fatalf("saved = %+v", s.saved)
 	}
@@ -160,7 +160,7 @@ func TestPasteIntoForm(t *testing.T) {
 	m, _ = m.Update(tea.PasteMsg{Content: "Pasted name"})
 	m = sendKeys(m, tab)
 	m, _ = m.Update(tea.PasteMsg{Content: "repo:o/r is:open"})
-	m = sendKeys(m, enter)
+	sendKeys(m, enter)
 	if len(s.saved) != 1 || s.saved[0][2].Name != "Pasted name" || s.saved[0][2].Query != "repo:o/r is:open" {
 		t.Fatalf("saved = %+v", s.saved)
 	}

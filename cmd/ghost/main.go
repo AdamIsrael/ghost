@@ -86,6 +86,12 @@ func defaultDeps() deps {
 	}
 }
 
+// Set at release build time by GoReleaser (-ldflags "-X main.version=…").
+var (
+	version = "dev"
+	commit  = "none"
+)
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, defaultDeps()))
 }
@@ -100,8 +106,13 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 	cfgPath := fs.String("config", paths.ConfigFile(), "path to config.toml")
 	dbPath := fs.String("db", paths.DataFile(), "path to SQLite database")
 	check := fs.Bool("check", false, "verify git, gh and claude, then exit")
+	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *showVersion {
+		fmt.Fprintf(stdout, "ghost %s (commit %s)\n", version, commit)
+		return 0
 	}
 	isInit := fs.Arg(0) == "init"
 	if isInit {

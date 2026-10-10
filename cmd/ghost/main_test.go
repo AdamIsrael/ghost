@@ -230,7 +230,7 @@ func TestTUISaveWritesViewsFileOnly(t *testing.T) {
 		for _, r := range "is:pr author:@me" {
 			m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 		}
-		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		return nil
 	}
 	if code := run([]string{"--config", cfg, "--db", filepath.Join(dir, "g.db")}, &out, &errb, d); code != 0 {
@@ -290,5 +290,15 @@ func TestBrokenThemeOnlyAffectsTUIAndCheck(t *testing.T) {
 	out.Reset()
 	if code := run([]string{"--config", cfg, "--check"}, &out, &errb, depsFor(okRunner)); code != 1 || !strings.Contains(out.String(), "bad.toml") {
 		t.Errorf("--check should report the theme file: exit %d\n%s", code, out.String())
+	}
+}
+
+func TestVersionFlag(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"--version"}, &out, &errb, depsFor(okRunner)); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "ghost dev (commit none)" {
+		t.Errorf("version output = %q", got)
 	}
 }

@@ -124,7 +124,7 @@ func TestKeysCallEngine(t *testing.T) {
 	if len(fe.posted) != 1 {
 		t.Errorf("P: posted = %v", fe.posted)
 	}
-	m, _ = m.Update(key("p"))
+	m.Update(key("p"))
 	if !fe.paused {
 		t.Error("p did not pause")
 	}
@@ -220,7 +220,7 @@ func TestRenderDoesNotQueryEngine(t *testing.T) {
 	if fe.snapCalls != snaps || fe.stateCalls != states {
 		t.Errorf("View queried the engine: snapshot %d→%d, state %d→%d", snaps, fe.snapCalls, states, fe.stateCalls)
 	}
-	m, _ = m.Update(changeMsg{})
+	m.Update(changeMsg{})
 	if fe.snapCalls == snaps {
 		t.Error("an engine change should refresh the snapshot")
 	}
@@ -231,7 +231,7 @@ func TestCursorMoveRefreshesPRState(t *testing.T) {
 	m := send(t, New(Options{Views: twoViews, MaxDailyCostUSD: 10, Engine: fe}),
 		tea.WindowSizeMsg{Width: 160, Height: 30}, result("Team", samplePR(1, "First"), samplePR(2, "Second")))
 	before := fe.stateCalls
-	m, _ = m.Update(key("j"))
+	m.Update(key("j"))
 	if fe.stateCalls == before {
 		t.Error("moving the cursor should load the newly selected PR's state")
 	}

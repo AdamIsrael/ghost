@@ -120,7 +120,7 @@ func TestRenderStripsControlAndEscapeSequences(t *testing.T) {
 		"row":    testStyles.renderRow(pr, 80, false),
 		"detail": testStyles.renderDetail(&pr, engine.PRState{}, 80, 20),
 	} {
-		if strings.ContainsAny(raw, "\r\x07\x9b") || strings.Contains(raw, "\x1b[8m") || strings.Contains(raw, "\x1bP") || strings.Contains(raw, "\x1b]52") {
+		if strings.ContainsAny(raw, "\r\x07") || strings.Contains(raw, "\x9b") || strings.Contains(raw, "\u009b") || strings.Contains(raw, "\x1b[8m") || strings.Contains(raw, "\x1bP") || strings.Contains(raw, "\x1b]52") {
 			t.Errorf("%s: control or escape sequence reached the terminal: %q", name, raw)
 		}
 	}
