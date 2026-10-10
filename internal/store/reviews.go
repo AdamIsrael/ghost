@@ -109,22 +109,21 @@ func scanReview(row interface{ Scan(...any) error }) (*Review, error) {
 }
 
 // ClaimNext marks the oldest queued review running and returns it, or nil.
+// The claim is one UPDATE so it takes SQLite's write lock up front: a
+// read-then-write transaction would fail with SQLITE_BUSY_SNAPSHOT under
+// concurrent writers instead of waiting on busy_timeout.
 func (s *Store) ClaimNext() (*Review, error) {
-	tx, err := s.db.Begin()
+	var id int64
+	err := s.db.QueryRow(`UPDATE reviews SET state = ?
+		WHERE id = (SELECT id FROM reviews WHERE state = ? ORDER BY created_at, id LIMIT 1)
+		RETURNING id`, Running, Queued).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
-	r, err := scanReview(tx.QueryRow(`SELECT `+reviewCols+` FROM reviews r JOIN prs p ON p.id = r.pr_id
-		WHERE r.state = ? ORDER BY r.created_at, r.id LIMIT 1`, Queued))
-	if err != nil || r == nil {
-		return nil, err
-	}
-	if _, err := tx.Exec(`UPDATE reviews SET state = ? WHERE id = ?`, Running, r.ID); err != nil {
-		return nil, err
-	}
-	r.State = Running
-	return r, tx.Commit()
+	return scanReview(s.db.QueryRow(`SELECT `+reviewCols+` FROM reviews r JOIN prs p ON p.id = r.pr_id WHERE r.id = ?`, id))
 }
 
 // SaveReview writes a review's mutable fields. Leaving the running state

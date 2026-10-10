@@ -135,11 +135,10 @@ func (e *Engine) Rereview(pr github.PR) error {
 	if err != nil {
 		return err
 	}
-	id, _, err := e.d.Store.EnqueueReview(prID, pr.HeadSHA, agentName, true)
-	if err != nil {
-		return err
+	if !e.enqueueAudited(prID, pr.HeadSHA, agentName, true,
+		fmt.Sprintf("re-review requested, agent %s, commit %.7s", agentName, pr.HeadSHA)) {
+		return errors.New("could not queue the re-review")
 	}
-	e.audit(prID, id, "queued", fmt.Sprintf("re-review requested, agent %s, commit %.7s", agentName, pr.HeadSHA))
 	e.poke()
 	return nil
 }

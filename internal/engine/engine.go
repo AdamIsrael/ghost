@@ -177,17 +177,29 @@ func (e *Engine) enqueue(res poller.Result) {
 		if err != nil {
 			continue
 		}
-		id, ok, err := e.d.Store.EnqueueReview(prID, pr.HeadSHA, agentName, false)
-		if err != nil || !ok {
-			continue
+		if e.enqueueAudited(prID, pr.HeadSHA, agentName, false,
+			fmt.Sprintf("view %q, agent %s, commit %.7s", v.Name, agentName, pr.HeadSHA)) {
+			created = true
 		}
-		e.audit(prID, id, "queued", fmt.Sprintf("view %q, agent %s, commit %.7s", v.Name, agentName, pr.HeadSHA))
-		created = true
 	}
 	if created {
 		e.poke()
 		e.notify()
 	}
+}
+
+// enqueueAudited inserts a review and its "queued" audit row under e.mu,
+// which claim also holds, so no worker can start it (and audit "started")
+// before "queued" is recorded.
+func (e *Engine) enqueueAudited(prID int64, headSHA, agentName string, force bool, msg string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	id, ok, err := e.d.Store.EnqueueReview(prID, headSHA, agentName, force)
+	if err != nil || !ok {
+		return false
+	}
+	e.audit(prID, id, "queued", msg)
+	return true
 }
 
 func startOfDay(t time.Time) time.Time {
@@ -212,7 +224,12 @@ func (e *Engine) claim() *store.Review {
 		return nil
 	}
 	r, err := e.d.Store.ClaimNext()
-	if err != nil || r == nil {
+	if err != nil {
+		// Transient store error: try again soon rather than at the next tick.
+		time.AfterFunc(time.Second, e.poke)
+		return nil
+	}
+	if r == nil {
 		return nil
 	}
 	e.budgetPaused = false

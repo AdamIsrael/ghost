@@ -1,8 +1,10 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -195,5 +197,46 @@ func TestAuditOrderAndLimit(t *testing.T) {
 	ev, err := s.Audit("o/r", 1, 2)
 	if err != nil || len(ev) != 2 || ev[0].Kind != "reviewed" || ev[1].Kind != "note" || ev[1].ReviewID != 0 || ev[0].ReviewID != id {
 		t.Fatalf("audit = %+v, %v", ev, err)
+	}
+}
+
+func TestClaimNextConcurrentWithWrites(t *testing.T) {
+	s := openTest(t)
+	const n = 40
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	for i := 0; i < n; i++ {
+		s.EnqueueReview(prID, "a", "claude", true)
+	}
+	var mu sync.Mutex
+	claimed := map[int64]bool{}
+	var errs []error
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				r, err := s.ClaimNext()
+				mu.Lock()
+				if err != nil {
+					errs = append(errs, err)
+				} else if r != nil {
+					if claimed[r.ID] {
+						errs = append(errs, fmt.Errorf("review %d claimed twice", r.ID))
+					}
+					claimed[r.ID] = true
+				}
+				done := err == nil && r == nil
+				mu.Unlock()
+				if done || err != nil {
+					return
+				}
+				s.AddAudit(prID, r.ID, "started", "") // concurrent writes, like the engine
+			}
+		}()
+	}
+	wg.Wait()
+	if len(errs) > 0 || len(claimed) != n {
+		t.Fatalf("claimed %d/%d, errors: %v", len(claimed), n, errs)
 	}
 }
