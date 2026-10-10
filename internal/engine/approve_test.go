@@ -1,0 +1,212 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/cli/go-gh/v2/pkg/api"
+
+	"github.com/AdamIsrael/ghost/internal/agent"
+	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/github"
+	"github.com/AdamIsrael/ghost/internal/poller"
+	"github.com/AdamIsrael/ghost/internal/store"
+)
+
+// approvable: auto-approve on, agent approves with only a nit.
+func approvable(mutate func(*config.Config)) func(*config.Config) {
+	return func(c *config.Config) {
+		c.AutoApprove = config.AutoApprove{Enabled: true, RequireConfirm: true, RequireCIGreen: true,
+			NoBlockingComments: true, NoChangesRequested: true, MaxChangedLines: 400}
+		if mutate != nil {
+			mutate(c)
+		}
+	}
+}
+
+func approvingHarness(t *testing.T, mutate func(*config.Config)) *harness {
+	h := newHarness(t, approvable(mutate))
+	h.rev.res = agent.ReviewResult{Verdict: agent.Approve, Summary: "Looks good.", CostUSD: 0.1,
+		Comments: []agent.InlineComment{{Path: "a.go", Line: 1, Body: "typo", Severity: "nit"}}}
+	return h
+}
+
+// postedReview runs PR 1 through review and posting.
+func (h *harness) postedReview(t *testing.T) {
+	t.Helper()
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApprovalPendingThenApprove(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.postedReview(t)
+	if h.approval(1) != store.ApprovalPending || h.approveCount() != 0 {
+		t.Fatalf("approval %q calls %d", h.approval(1), h.approveCount())
+	}
+	if err := h.e.Approve(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	if h.approval(1) != store.ApprovalApproved || h.approveCount() != 1 {
+		t.Fatalf("approval %q calls %d", h.approval(1), h.approveCount())
+	}
+	if body := h.approvals[0]; !strings.Contains(body, "Approved by Ghost") || !strings.Contains(body, "<!-- ghost-approval-id:") {
+		t.Errorf("body = %q", body)
+	}
+	if got := kinds(h.e.PRState("o/r", 1).Audit); !strings.HasSuffix(got, "approval pending,approved") {
+		t.Errorf("audit = %s", got)
+	}
+}
+
+func TestAutoApproveWithoutConfirm(t *testing.T) {
+	h := approvingHarness(t, func(c *config.Config) { c.PostMode = "auto"; c.AutoApprove.RequireConfirm = false })
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	waitFor(t, "approved", func() bool { return h.approval(1) == store.ApprovalApproved })
+	if h.postCount() != 1 || h.approveCount() != 1 {
+		t.Fatalf("posts %d approvals %d", h.postCount(), h.approveCount())
+	}
+}
+
+func TestApprovalWaitsForCIThenApprovesOnPoll(t *testing.T) {
+	h := approvingHarness(t, func(c *config.Config) { c.AutoApprove.RequireConfirm = false })
+	h.ci[1] = "PENDING"
+	h.postedReview(t)
+	if h.approval(1) != store.ApprovalWaiting {
+		t.Fatalf("approval = %q", h.approval(1))
+	}
+	if r, _ := h.st.LatestReview("o/r", 1); !strings.Contains(r.ApprovalNote, "CI is pending") {
+		t.Errorf("note = %q", r.ApprovalNote)
+	}
+	h.mu.Lock()
+	h.ci[1] = "SUCCESS"
+	h.mu.Unlock()
+	green := ghPR(1, "sha1")
+	green.CIState = "SUCCESS"
+	h.e.HandlePoll(poller.Result{View: "Watch", PRs: []github.PR{green}, At: time.Now()})
+	waitFor(t, "approved after CI", func() bool { return h.approval(1) == store.ApprovalApproved })
+}
+
+func TestNotEligibleWithBlockingComment(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.rev.res.Comments[0].Severity = "blocking"
+	h.postedReview(t)
+	r, _ := h.st.LatestReview("o/r", 1)
+	if r.Approval != store.ApprovalNo || !strings.Contains(r.ApprovalNote, "blocking") || h.approveCount() != 0 {
+		t.Fatalf("review %+v approvals %d", r, h.approveCount())
+	}
+	if err := h.e.Approve(context.Background(), "o/r", 1); err == nil {
+		t.Error("ineligible PR must not be approvable with a")
+	}
+}
+
+func TestRequestChangesVerdictNeverApproved(t *testing.T) {
+	h := approvingHarness(t, func(c *config.Config) { c.AutoApprove.RequireConfirm = false })
+	h.rev.res.Verdict = agent.RequestChanges
+	h.postedReview(t)
+	if h.approval(1) != store.ApprovalNo || h.approveCount() != 0 {
+		t.Fatalf("approval %q calls %d", h.approval(1), h.approveCount())
+	}
+}
+
+func TestApproveRechecksAtApproveTime(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.postedReview(t)
+	h.mu.Lock()
+	h.ci[1] = "FAILURE"
+	h.mu.Unlock()
+	if err := h.e.Approve(context.Background(), "o/r", 1); err == nil {
+		t.Fatal("want error: CI turned red")
+	}
+	if h.approval(1) != store.ApprovalWaiting || h.approveCount() != 0 {
+		t.Fatalf("approval %q calls %d", h.approval(1), h.approveCount())
+	}
+}
+
+func TestApproveSupersededHead(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.postedReview(t)
+	h.mu.Lock()
+	h.heads[1] = "sha2"
+	h.mu.Unlock()
+	if err := h.e.Approve(context.Background(), "o/r", 1); err == nil {
+		t.Fatal("want error: head moved")
+	}
+	if h.approval(1) != store.ApprovalNo || h.approveCount() != 0 {
+		t.Fatalf("approval %q calls %d", h.approval(1), h.approveCount())
+	}
+}
+
+func TestApproveTwiceConcurrentlyApprovesOnce(t *testing.T) {
+	h := approvingHarness(t, nil)
+	release := make(chan struct{})
+	h.approveFn = func() error { <-release; return nil }
+	h.postedReview(t)
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); errs[i] = h.e.Approve(context.Background(), "o/r", 1) }(i)
+	}
+	waitFor(t, "one approval in flight", func() bool { return h.approveCount() == 1 })
+	close(release)
+	wg.Wait()
+	if h.approveCount() != 1 || (errs[0] == nil) == (errs[1] == nil) {
+		t.Fatalf("approvals %d errs %v", h.approveCount(), errs)
+	}
+}
+
+func TestApproveOwnPRFailsCleanly(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.approveFn = func() error {
+		return &api.HTTPError{StatusCode: 422, Message: "Can not approve your own pull request"}
+	}
+	h.postedReview(t)
+	if err := h.e.Approve(context.Background(), "o/r", 1); err == nil {
+		t.Fatal("want error")
+	}
+	r, _ := h.st.LatestReview("o/r", 1)
+	if r.Approval != store.ApprovalFailed || !strings.Contains(r.ApprovalNote, "own pull request") {
+		t.Fatalf("review = %+v", r)
+	}
+	if h.postCount() != 1 {
+		t.Error("a failed approval must not post anything else")
+	}
+}
+
+func TestUncertainApprovalChecksGitHub(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.approveFn = func() error { return errors.New("context deadline exceeded") }
+	h.postedReview(t)
+	h.e.Approve(context.Background(), "o/r", 1)
+	if h.approval(1) != store.ApprovalUnknown {
+		t.Fatalf("approval = %q", h.approval(1))
+	}
+	h.mu.Lock()
+	h.onGH, h.approveFn = true, nil
+	h.mu.Unlock()
+	if err := h.e.Approve(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	if h.approval(1) != store.ApprovalApproved || h.approveCount() != 1 {
+		t.Fatalf("approval %q calls %d", h.approval(1), h.approveCount())
+	}
+}
+
+func TestApprovalDisabledDoesNothing(t *testing.T) {
+	h := newHarness(t, nil) // auto_approve disabled by default
+	h.rev.res.Verdict = agent.Approve
+	h.rev.res.Comments = nil
+	h.postedReview(t)
+	if h.approval(1) != "" || strings.Contains(kinds(h.e.PRState("o/r", 1).Audit), "approv") {
+		t.Fatalf("approval %q audit %s", h.approval(1), kinds(h.e.PRState("o/r", 1).Audit))
+	}
+}

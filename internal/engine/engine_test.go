@@ -52,7 +52,11 @@ type harness struct {
 	posts  []github.ReviewPost
 	postFn func(github.ReviewPost) (github.PostResult, error)
 	onGH   bool // what HasReview reports
-	cancel context.CancelFunc
+
+	ci        map[int]string // PR number → CI state reported by GetPR (default SUCCESS)
+	approvals []string       // bodies passed to Approve
+	approveFn func() error
+	cancel    context.CancelFunc
 }
 
 func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
@@ -69,7 +73,7 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	h := &harness{t: t, st: st, heads: map[int]string{}, rev: &fakeReviewer{res: agent.ReviewResult{
+	h := &harness{t: t, st: st, heads: map[int]string{}, ci: map[int]string{}, rev: &fakeReviewer{res: agent.ReviewResult{
 		Verdict: agent.RequestChanges, Summary: "Needs a nil check.", CostUSD: 0.4,
 		Comments: []agent.InlineComment{{Path: "a.go", Line: 3, Body: "nil deref", Severity: "blocking"}},
 	}}}
@@ -78,7 +82,21 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 		GetPR: func(_ context.Context, repo string, n int) (github.PRDetail, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			return github.PRDetail{PR: github.PR{Repo: repo, Number: n, Title: "T", BaseRef: "main", HeadSHA: h.heads[n]}, Files: []string{"a.go"}}, nil
+			ci, ok := h.ci[n]
+			if !ok {
+				ci = "SUCCESS"
+			}
+			return github.PRDetail{PR: github.PR{Repo: repo, Number: n, Title: "T", BaseRef: "main", HeadSHA: h.heads[n], CIState: ci, Additions: 10}, Files: []string{"a.go"}}, nil
+		},
+		Approve: func(_ context.Context, repo string, n int, commitID, body string) error {
+			h.mu.Lock()
+			h.approvals = append(h.approvals, body)
+			fn := h.approveFn
+			h.mu.Unlock()
+			if fn != nil {
+				return fn()
+			}
+			return nil
 		},
 		Checkout: func(_ context.Context, repo string, n int, base, sha string) (workspace.Workspace, func(), error) {
 			return workspace.Workspace{Dir: "/wt", ContextDir: "/ctx", DiffPath: "/ctx/diff.patch", CommitsPath: "/ctx/commits.txt"}, func() {}, nil
@@ -120,6 +138,16 @@ func (h *harness) poll(view string, prs ...github.PR) {
 }
 
 func (h *harness) postCount() int { h.mu.Lock(); defer h.mu.Unlock(); return len(h.posts) }
+
+func (h *harness) approveCount() int { h.mu.Lock(); defer h.mu.Unlock(); return len(h.approvals) }
+
+func (h *harness) approval(n int) string {
+	r, _ := h.st.LatestReview("o/r", n)
+	if r == nil {
+		return ""
+	}
+	return r.Approval
+}
 
 func ghPR(n int, sha string) github.PR {
 	return github.PR{Repo: "o/r", Number: n, Title: "T", HeadSHA: sha, BaseRef: "main"}

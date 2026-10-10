@@ -54,6 +54,7 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 			r.State = store.Posted
 			e.save(r)
 			e.audit(r.PRID, r.ID, "posted", "found on GitHub from the earlier attempt; not posted again")
+			e.evaluateApproval(ctx, r, nil)
 			return nil
 		}
 	}
@@ -110,6 +111,7 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 		msg += "; posted as a comment (GitHub rejected the review event)"
 	}
 	e.audit(r.PRID, r.ID, "posted", msg)
+	e.evaluateApproval(ctx, r, nil)
 	return nil
 }
 

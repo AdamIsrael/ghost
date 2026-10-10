@@ -26,6 +26,7 @@ type Deps struct {
 	NewReviewer func(name string, a config.Agent) (agent.Reviewer, error)
 	PostReview  func(ctx context.Context, repo string, number int, p github.ReviewPost) (github.PostResult, error)
 	HasReview   func(ctx context.Context, repo string, number int, marker string) (bool, error)
+	Approve     func(ctx context.Context, repo string, number int, commitID, body string) error
 	Now         func() time.Time
 }
 
@@ -125,6 +126,7 @@ func (e *Engine) Run(ctx context.Context) {
 			return
 		case r := <-e.polls:
 			e.enqueue(r)
+			e.recheckApprovals(ctx, r)
 		case <-t.C:
 			e.poke()
 			e.notify()
