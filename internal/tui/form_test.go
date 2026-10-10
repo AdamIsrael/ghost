@@ -89,3 +89,12 @@ func TestFormRender(t *testing.T) {
 		t.Error("new form title missing")
 	}
 }
+
+func TestFormFieldsFitWidth(t *testing.T) {
+	f := newViewForm(config.View{Name: "cli", Query: "repo:cli/cli is:open is:pr"}, "", nil)
+	for _, line := range strings.Split(ansi.Strip(f.render(150, 12)), "\n") {
+		if strings.HasSuffix(strings.TrimRight(line, " "), "…") {
+			t.Errorf("field overflows and is truncated: %q", line)
+		}
+	}
+}

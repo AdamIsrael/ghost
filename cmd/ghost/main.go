@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -164,12 +165,41 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		}
 	}()
 	opts.Engine = eng
+	var p *poller.Poller
 	if s, err := d.newSearcher(); err != nil {
 		opts.PollDisabled = "GitHub unavailable: " + err.Error()
-	} else if len(cfg.Views) > 0 {
-		p := poller.New(s, cfg.Views, cfg.PollInterval.Duration)
+	} else {
+		// Started even with no views: views can be added from the TUI.
+		p = poller.New(s, cfg.Views, cfg.PollInterval.Duration)
 		go p.Run(ctx)
 		opts.Results, opts.PollNow = p.Results(), p.PollNow
+	}
+	for name := range cfg.Agents {
+		opts.Agents = append(opts.Agents, name)
+	}
+	sort.Strings(opts.Agents)
+	viewsPath := config.ViewsPath(*cfgPath)
+	opts.SaveViews = func(views []config.View) error {
+		next := cfg
+		next.Views = views
+		if err := next.Validate(); err != nil {
+			return err
+		}
+		var managed []config.View
+		for _, v := range views {
+			if v.Source != "config.toml" {
+				managed = append(managed, v)
+			}
+		}
+		if err := config.SaveViews(viewsPath, managed); err != nil {
+			return err
+		}
+		cfg.Views = views
+		eng.SetViews(views)
+		if p != nil {
+			p.SetViews(views)
+		}
+		return nil
 	}
 	if err := d.runTUI(tui.New(opts)); err != nil {
 		fmt.Fprintln(stderr, "ghost:", err)

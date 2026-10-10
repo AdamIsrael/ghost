@@ -212,3 +212,36 @@ func TestStartRunsEngine(t *testing.T) {
 		t.Error("TUI not wired to an engine")
 	}
 }
+
+func TestTUISaveWritesViewsFileOnly(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	var out, errb bytes.Buffer
+	run([]string{"--config", cfg, "init"}, &out, &errb, depsFor(okRunner))
+	before, _ := os.ReadFile(cfg)
+	d := depsFor(okRunner)
+	d.runTUI = func(m tea.Model) error {
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 140, Height: 20})
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+		for _, r := range "Mine" {
+			m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		for _, r := range "is:pr author:@me" {
+			m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		return nil
+	}
+	if code := run([]string{"--config", cfg, "--db", filepath.Join(dir, "g.db")}, &out, &errb, d); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	after, _ := os.ReadFile(cfg)
+	if !bytes.Equal(before, after) {
+		t.Error("config.toml was modified")
+	}
+	views, _ := os.ReadFile(filepath.Join(dir, "views.toml"))
+	if !strings.Contains(string(views), `name = "Review requested"`) || !strings.Contains(string(views), `name = "Mine"`) {
+		t.Errorf("views.toml =\n%s", views)
+	}
+}

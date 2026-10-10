@@ -122,8 +122,8 @@ func (f viewForm) render(width, height int) string {
 		}
 		return "  "
 	}
-	f.name.SetWidth(max(width-16, 10))
-	f.query.SetWidth(max(width-16, 10))
+	f.name.SetWidth(max(width-20, 10)) // room for the marker, label and prompt
+	f.query.SetWidth(max(width-20, 10))
 	auto := "[ ] off"
 	if f.auto {
 		auto = "[x] on (reviews cost money)"
