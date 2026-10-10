@@ -38,6 +38,9 @@ func (c *Config) Validate() error {
 	if c.PostMode != "confirm" && c.PostMode != "auto" {
 		add(`post_mode must be "confirm" or "auto"`)
 	}
+	if c.AutoApprove.MaxChangedLines < 0 {
+		add("auto_approve.max_changed_lines must be 0 (no limit) or more")
+	}
 
 	switch {
 	case len(c.Agents) == 0:

@@ -26,6 +26,8 @@ prompt_file = "prompts/default.md"
 enabled = false
 require_confirm = true
 require_ci_green = true
+# A PR with no CI checks at all is not "green" unless you set this.
+no_checks_is_green = false
 no_blocking_comments = true
 no_changes_requested = true
 max_changed_lines = 400

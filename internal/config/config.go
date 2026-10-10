@@ -55,6 +55,7 @@ type AutoApprove struct {
 	Enabled            bool `toml:"enabled"`
 	RequireConfirm     bool `toml:"require_confirm"`
 	RequireCIGreen     bool `toml:"require_ci_green"`
+	NoChecksIsGreen    bool `toml:"no_checks_is_green"`
 	NoBlockingComments bool `toml:"no_blocking_comments"`
 	NoChangesRequested bool `toml:"no_changes_requested"`
 	MaxChangedLines    int  `toml:"max_changed_lines"`

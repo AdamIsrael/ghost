@@ -175,3 +175,10 @@ func TestPostModeDefaultAndValidation(t *testing.T) {
 		t.Errorf("want post_mode error, got %v", err)
 	}
 }
+
+func TestMaxChangedLinesNotNegative(t *testing.T) {
+	cfg := mustParse(t, minimal+"[auto_approve]\nmax_changed_lines = -1\n")
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "max_changed_lines") {
+		t.Fatalf("want max_changed_lines error, got %v", err)
+	}
+}
