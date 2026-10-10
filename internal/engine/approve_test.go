@@ -58,7 +58,7 @@ func TestApprovalPendingThenApprove(t *testing.T) {
 	if h.approval(1) != store.ApprovalApproved || h.approveCount() != 1 {
 		t.Fatalf("approval %q calls %d", h.approval(1), h.approveCount())
 	}
-	if body := h.approvals[0]; !strings.Contains(body, "Approved by Ghost") || !strings.Contains(body, "<!-- ghost-approval-id:") {
+	if body := h.approvals[0]; body != approvalMarker(1) {
 		t.Errorf("body = %q", body)
 	}
 	if got := kinds(h.e.PRState("o/r", 1).Audit); !strings.HasSuffix(got, "approval pending,approved") {
@@ -420,5 +420,16 @@ func TestPostFromTUIIsTrackedByEngineShutdown(t *testing.T) {
 	}
 	if h.state(1) != store.PostUnknown {
 		t.Errorf("interrupted post should be post-unknown, got %q", h.state(1))
+	}
+}
+
+func TestApprovalCustomMessage(t *testing.T) {
+	h := approvingHarness(t, func(c *config.Config) { c.ApprovalMessage = "LGTM from {{.Agent}} at {{.HeadSHA}}" })
+	h.postedReview(t)
+	if err := h.e.Approve(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	if want := "LGTM from claude at sha1\n" + approvalMarker(1); h.approvals[0] != want {
+		t.Errorf("body = %q, want %q", h.approvals[0], want)
 	}
 }

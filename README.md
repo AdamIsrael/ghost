@@ -106,6 +106,19 @@ Ghost reads `~/.config/ghost/config.toml` (or `$XDG_CONFIG_HOME/ghost/config.tom
 | `post_mode` | `"confirm"` | `"confirm"` (press `P`) or `"auto"` |
 | `theme` | `"auto"` | Color theme; see [Themes](#themes) |
 | `default_agent` | `"claude"` | Agent used when a view doesn't name one |
+| `review_footer` | `""` (off) | Text added below each posted review |
+| `approval_message` | `""` (off) | Text of each approval |
+
+### Footer and approval message
+
+Posts carry only the review by default; nothing says it came from Ghost. To add a note, set either option to a Go template using `{{.Agent}}`, `{{.Model}}`, `{{.Repo}}`, `{{.Number}}` and `{{.HeadSHA}}` (7 characters):
+
+```toml
+review_footer = "<sub>Automated review · agent `{{.Agent}}` · commit {{.HeadSHA}}</sub>"
+approval_message = "Approved by Ghost: no blocking issues found."
+```
+
+Each post also ends with a hidden HTML comment that Ghost uses to avoid posting twice; it isn't shown on GitHub.
 
 ### Agents and prompts
 

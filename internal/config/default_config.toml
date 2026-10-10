@@ -17,6 +17,12 @@ post_mode = "confirm"
 # this file. Press t in the TUI to try them. NO_COLOR=1 forces mono.
 theme = "auto"
 
+# Text added to GitHub posts. Both are off (empty) by default, so posts
+# carry only the review itself. Go templates with {{.Agent}} {{.Model}}
+# {{.Repo}} {{.Number}} {{.HeadSHA}} (7 characters).
+# review_footer = "<sub>Automated review · agent `{{.Agent}}` · commit {{.HeadSHA}}</sub>"
+# approval_message = "Approved by Ghost: no blocking issues found."
+
 default_agent = "claude"
 
 [agents.claude]

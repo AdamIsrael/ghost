@@ -34,6 +34,8 @@ type Config struct {
 	MaxCostPerReviewUSD  float64          `toml:"max_cost_per_review_usd"`
 	PostMode             string           `toml:"post_mode"`
 	Theme                string           `toml:"theme"`
+	ReviewFooter         string           `toml:"review_footer"`
+	ApprovalMessage      string           `toml:"approval_message"`
 	DefaultAgent         string           `toml:"default_agent"`
 	Agents               map[string]Agent `toml:"agents"`
 	AutoApprove          AutoApprove      `toml:"auto_approve"`

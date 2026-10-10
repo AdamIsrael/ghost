@@ -26,7 +26,7 @@ func TestPostPending(t *testing.T) {
 		t.Fatalf("state %s posts %d", h.state(1), h.postCount())
 	}
 	p := h.posts[0]
-	if p.CommitID != "sha1" || p.Event != "REQUEST_CHANGES" || !strings.HasPrefix(p.Body, "Needs a nil check.") || !strings.Contains(p.Body, "Automated review by Ghost") || !strings.Contains(p.Body, "<!-- ghost-review-id:") {
+	if p.CommitID != "sha1" || p.Event != "REQUEST_CHANGES" || !strings.HasPrefix(p.Body, "Needs a nil check.") || p.Body != "Needs a nil check.\n"+marker(1) {
 		t.Errorf("post = %+v", p)
 	}
 	if len(p.Comments) != 1 || p.Comments[0].Path != "a.go" || p.Comments[0].Line != 3 || p.Comments[0].Body != "**Blocking:** nil deref" {
@@ -217,5 +217,23 @@ func TestRereviewTwiceConcurrentlyQueuesOnce(t *testing.T) {
 	}
 	if q, _ := h.st.CountState(store.Queued); ok != 1 || q != 1 {
 		t.Fatalf("successful rereviews %d, queued %d; want 1 and 1", ok, q)
+	}
+}
+
+func TestPostCustomFooter(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) {
+		c.ReviewFooter = "<sub>{{.Agent}} ({{.Model}}) · {{.Repo}}#{{.Number}} · {{.HeadSHA}}</sub>"
+		c.Agents["claude"] = config.Agent{Kind: "claude", Model: "m1", Prompt: "x"}
+	})
+	h.heads[1] = "0123456789"
+	h.start()
+	h.poll("Team", ghPR(1, "0123456789"))
+	waitFor(t, "ready", func() bool { return h.state(1) == store.Ready })
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	want := "Needs a nil check.\n\n<sub>claude (m1) · o/r#1 · 0123456</sub>\n" + marker(1)
+	if got := h.posts[0].Body; got != want {
+		t.Errorf("body = %q, want %q", got, want)
 	}
 }

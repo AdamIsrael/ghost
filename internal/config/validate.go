@@ -42,6 +42,11 @@ func (c *Config) Validate() error {
 	if c.PostMode != "confirm" && c.PostMode != "auto" {
 		add(`post_mode must be "confirm" or "auto"`)
 	}
+	for _, m := range []struct{ key, text string }{{"review_footer", c.ReviewFooter}, {"approval_message", c.ApprovalMessage}} {
+		if _, err := RenderMessage(m.text, sampleMessage); err != nil {
+			add("%s: %v", m.key, err)
+		}
+	}
 	if c.AutoApprove.MaxChangedLines < 0 {
 		add("auto_approve.max_changed_lines must be 0 (no limit) or more")
 	}

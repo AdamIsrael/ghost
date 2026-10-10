@@ -223,8 +223,15 @@ func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 		return fmt.Errorf("no longer meets the auto-approve rules: %s", dec.Summary())
 	}
 
-	body := fmt.Sprintf("Approved by Ghost: the review found no blocking issues and the PR meets the auto-approve rules.\n\n<sub>agent `%s` · commit %.7s</sub>\n%s",
-		r.Agent, r.HeadSHA, marker)
+	body := marker
+	msg, err := e.message(e.cfg.ApprovalMessage, r)
+	if err != nil {
+		e.d.Store.UpdateApproval(r.ID, store.ApprovalApproving, from, r.ApprovalNote) // release the claim
+		return fmt.Errorf("approval_message: %w", err)
+	}
+	if msg != "" {
+		body = msg + "\n" + marker
+	}
 	if err := e.d.Approve(ctx, r.Repo, r.Number, r.HeadSHA, body); err != nil {
 		if github.IsClientError(err) {
 			e.setApproval(r, store.ApprovalApproving, store.ApprovalFailed, err.Error())

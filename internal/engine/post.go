@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/AdamIsrael/ghost/internal/agent"
+	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/secrets"
 	"github.com/AdamIsrael/ghost/internal/store"
@@ -77,12 +78,17 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 		e.audit(r.PRID, r.ID, "blocked", r.Error+"; it will not be posted")
 		return errors.New(r.Error)
 	}
-	p := github.ReviewPost{
-		CommitID: r.HeadSHA,
-		Event:    "COMMENT",
-		Body: fmt.Sprintf("%s\n\n<sub>Automated review by Ghost · agent `%s` · commit %.7s</sub>\n%s",
-			r.Summary, r.Agent, r.HeadSHA, marker(r.ID)),
+	footer, err := e.message(e.cfg.ReviewFooter, r)
+	if err != nil {
+		r.State = from
+		e.save(r)
+		return fmt.Errorf("review_footer: %w", err)
 	}
+	body := r.Summary
+	if footer != "" {
+		body += "\n\n" + footer
+	}
+	p := github.ReviewPost{CommitID: r.HeadSHA, Event: "COMMENT", Body: body + "\n" + marker(r.ID)}
 	if r.Verdict == string(agent.RequestChanges) {
 		p.Event = "REQUEST_CHANGES"
 	}
@@ -148,4 +154,13 @@ func (e *Engine) Rereview(pr github.PR) error {
 	}
 	e.poke()
 	return nil
+}
+
+// message renders an operator message template (review_footer or
+// approval_message) for r. An empty template renders as "".
+func (e *Engine) message(text string, r *store.Review) (string, error) {
+	return config.RenderMessage(text, config.MessageData{
+		Agent: r.Agent, Model: e.cfg.Agents[r.Agent].Model,
+		Repo: r.Repo, Number: r.Number, HeadSHA: fmt.Sprintf("%.7s", r.HeadSHA),
+	})
 }
