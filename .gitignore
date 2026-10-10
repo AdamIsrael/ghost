@@ -11,3 +11,6 @@ bin/
 
 # Superpowers plan workspaces
 .superpowers/
+
+# GoReleaser output
+dist/

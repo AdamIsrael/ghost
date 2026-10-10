@@ -1,0 +1,30 @@
+# Builds release binaries when a v* tag is pushed (see .github/workflows/release.yml).
+# Try it locally: goreleaser release --snapshot --clean
+version: 2
+project_name: ghost
+
+builds:
+  - id: ghost
+    main: ./cmd/ghost
+    binary: ghost
+    env:
+      - CGO_ENABLED=0 # pure Go (SQLite via modernc), so cross-compiling just works
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .ShortCommit }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^Update beads export"

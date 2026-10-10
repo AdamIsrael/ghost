@@ -1,5 +1,7 @@
 # Ghost
 
+[![CI](https://github.com/AdamIsrael/ghost/actions/workflows/ci.yml/badge.svg)](https://github.com/AdamIsrael/ghost/actions/workflows/ci.yml)
+
 Ghost is a terminal UI that watches GitHub pull requests and reviews them with an AI agent. It polls the PR searches you define, shows each PR's status, runs reviews with [Claude Code](https://docs.claude.com/en/docs/claude-code), and posts the review comments (and, if you allow it, approvals) back to GitHub, all within a daily budget you set.
 
 ```
@@ -22,11 +24,15 @@ Ghost is a terminal UI that watches GitHub pull requests and reviews them with a
 
 ## Install
 
+Download a binary for Linux or macOS (Intel or Apple silicon) from the [releases page](https://github.com/AdamIsrael/ghost/releases), unpack it, and put `ghost` on your `PATH`. `checksums.txt` lists each archive's SHA-256.
+
+Or build it with Go:
+
 ```bash
 go install github.com/AdamIsrael/ghost/cmd/ghost@latest
 ```
 
-Or from a clone: `go build -o bin/ghost ./cmd/ghost`.
+`ghost --version` shows which version you have.
 
 ## Quick start
 
@@ -189,6 +195,7 @@ A file named after a built-in replaces it. `ghost --check` warns if your selecte
 ghost [--config PATH] [--db PATH]                  start the TUI
 ghost [--config PATH] init                         write starter config, views and prompt
 ghost [--config PATH] --check                      check tools, login and config
+ghost --version                                    print the version
 ghost [--config PATH] review <pr> --dry-run        review one PR and print it; posts nothing
 ghost [--config PATH] review <pr> --show-prompt    print the prompt; runs nothing
 ```
@@ -213,6 +220,9 @@ These follow `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` when set.
 ```bash
 go test -race ./...
 go vet ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 ```
+
+CI runs these (plus a `gofmt` check) on Linux and macOS for every push and pull request. Pushing a tag like `v0.1.0` builds release binaries with [GoReleaser](https://goreleaser.com) and publishes them on the releases page; `goreleaser release --snapshot --clean` does a local dry run into `dist/`.
 
 The design docs and implementation plans are in [`docs/superpowers/`](docs/superpowers). Work is tracked with [beads](https://github.com/gastownhall/beads) (`bd ready`).
