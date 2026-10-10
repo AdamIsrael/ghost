@@ -29,3 +29,10 @@ func xdg(env, fallback, file string) string {
 	}
 	return filepath.Join(ExpandHome("~/"+fallback), "ghost", file)
 }
+
+func CacheDir() string {
+	if base := os.Getenv("XDG_CACHE_HOME"); base != "" {
+		return filepath.Join(base, "ghost")
+	}
+	return filepath.Join(ExpandHome("~/.cache"), "ghost")
+}

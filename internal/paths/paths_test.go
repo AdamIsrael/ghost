@@ -42,3 +42,16 @@ func TestDefaultLocations(t *testing.T) {
 		t.Errorf("DataFile with XDG = %q", got)
 	}
 }
+
+func TestCacheDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", "")
+	if got, want := CacheDir(), filepath.Join(home, ".cache/ghost"); got != want {
+		t.Errorf("CacheDir = %q, want %q", got, want)
+	}
+	t.Setenv("XDG_CACHE_HOME", "/xc")
+	if got := CacheDir(); got != "/xc/ghost" {
+		t.Errorf("CacheDir with XDG = %q", got)
+	}
+}

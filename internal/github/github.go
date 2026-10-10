@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -147,23 +150,103 @@ func (c *Client) SearchPRs(ctx context.Context, query string) ([]PR, error) {
 		if n.Number == 0 {
 			continue
 		}
-		pr := PR{
-			Repo: n.Repository.NameWithOwner, Number: n.Number, Title: n.Title, URL: n.URL,
-			Author: "ghost", Body: n.Body, BaseRef: n.BaseRefName, HeadRef: n.HeadRefName,
-			HeadSHA: n.HeadRefOid, IsDraft: n.IsDraft, ReviewDecision: n.ReviewDecision,
-			Additions: n.Additions, Deletions: n.Deletions, ChangedFiles: n.ChangedFiles,
-			UpdatedAt: n.UpdatedAt,
-		}
-		if n.Author != nil {
-			pr.Author = n.Author.Login
-		}
-		if len(n.Commits.Nodes) > 0 && n.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
-			pr.CIState = n.Commits.Nodes[0].Commit.StatusCheckRollup.State
-		}
-		prs = append(prs, pr)
+		prs = append(prs, toPR(n))
 	}
 	if hidden != nil {
 		return prs, hidden
 	}
 	return prs, nil
+}
+
+func toPR(n prNode) PR {
+	pr := PR{
+		Repo: n.Repository.NameWithOwner, Number: n.Number, Title: n.Title, URL: n.URL,
+		Author: "ghost", Body: n.Body, BaseRef: n.BaseRefName, HeadRef: n.HeadRefName,
+		HeadSHA: n.HeadRefOid, IsDraft: n.IsDraft, ReviewDecision: n.ReviewDecision,
+		Additions: n.Additions, Deletions: n.Deletions, ChangedFiles: n.ChangedFiles,
+		UpdatedAt: n.UpdatedAt,
+	}
+	if n.Author != nil {
+		pr.Author = n.Author.Login
+	}
+	if len(n.Commits.Nodes) > 0 && n.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
+		pr.CIState = n.Commits.Nodes[0].Commit.StatusCheckRollup.State
+	}
+	return pr
+}
+
+// PRDetail is a PR plus the paths it changes (first 100).
+type PRDetail struct {
+	PR
+	Files []string
+}
+
+const prQuery = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number title url body isDraft updatedAt additions deletions changedFiles
+      baseRefName headRefName headRefOid reviewDecision
+      author { login }
+      repository { nameWithOwner }
+      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      files(first: 100) { nodes { path } }
+    }
+  }
+}`
+
+type prResponse struct {
+	Repository *struct {
+		PullRequest *struct {
+			prNode
+			Files struct {
+				Nodes []struct {
+					Path string `json:"path"`
+				} `json:"nodes"`
+			} `json:"files"`
+		} `json:"pullRequest"`
+	} `json:"repository"`
+}
+
+// GetPR fetches one pull request and its changed file paths.
+func (c *Client) GetPR(ctx context.Context, repo string, number int) (PRDetail, error) {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		return PRDetail{}, fmt.Errorf("repo %q is not owner/name", repo)
+	}
+	var resp prResponse
+	vars := map[string]interface{}{"owner": owner, "name": name, "number": number}
+	if err := c.gql.DoWithContext(ctx, prQuery, vars, &resp); err != nil {
+		return PRDetail{}, fmt.Errorf("get %s#%d: %w", repo, number, err)
+	}
+	if resp.Repository == nil || resp.Repository.PullRequest == nil {
+		return PRDetail{}, fmt.Errorf("%s#%d not found", repo, number)
+	}
+	n := resp.Repository.PullRequest
+	d := PRDetail{PR: toPR(n.prNode)}
+	for _, f := range n.Files.Nodes {
+		d.Files = append(d.Files, f.Path)
+	}
+	return d, nil
+}
+
+var (
+	prURL   = regexp.MustCompile(`^https?://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)(?:[/?#].*)?$`)
+	prShort = regexp.MustCompile(`^([\w.-]+/[\w.-]+)#(\d+)$`)
+)
+
+// ParsePRRef accepts a GitHub PR URL or owner/name#number.
+func ParsePRRef(s string) (string, int, error) {
+	s = strings.TrimSpace(s)
+	m := prURL.FindStringSubmatch(s)
+	if m == nil {
+		m = prShort.FindStringSubmatch(s)
+	}
+	if m == nil {
+		return "", 0, fmt.Errorf("%q is not a PR URL or owner/repo#number", s)
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil || n < 1 {
+		return "", 0, fmt.Errorf("%q has an invalid PR number", s)
+	}
+	return m[1], n, nil
 }

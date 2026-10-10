@@ -128,3 +128,52 @@ func TestSearchErrorOmitsQuery(t *testing.T) {
 		t.Fatalf("error should carry the cause, not the query: %v", err)
 	}
 }
+
+func TestGetPR(t *testing.T) {
+	f := &fakeGQL{fixture: "testdata/pr.json"}
+	d, err := New(f).GetPR(context.Background(), "o/r", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Number != 7 || d.Title != "Fix parser" || d.HeadSHA != "deadbeef00" || d.CIState != "SUCCESS" || d.Author != "octocat" {
+		t.Errorf("PR = %+v", d.PR)
+	}
+	if len(d.Files) != 2 || d.Files[0] != "parser.go" {
+		t.Errorf("files = %v", d.Files)
+	}
+	if f.vars["owner"] != "o" || f.vars["name"] != "r" || f.vars["number"] != 7 {
+		t.Errorf("vars = %v", f.vars)
+	}
+}
+
+func TestGetPRNotFound(t *testing.T) {
+	f := &fakeGQL{fixture: "testdata/search.json"} // no repository.pullRequest
+	if _, err := New(f).GetPR(context.Background(), "o/r", 7); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("want not found, got %v", err)
+	}
+}
+
+func TestParsePRRef(t *testing.T) {
+	good := map[string]struct {
+		repo string
+		n    int
+	}{
+		"https://github.com/o/r/pull/7":                 {"o/r", 7},
+		"https://github.com/o/r/pull/7/files":           {"o/r", 7},
+		"https://github.com/o/r/pull/7#discussion_r1":   {"o/r", 7},
+		"http://github.com/Org-1/repo.name/pull/12?x=1": {"Org-1/repo.name", 12},
+		"o/r#7":     {"o/r", 7},
+		"  o/r#7  ": {"o/r", 7},
+	}
+	for in, want := range good {
+		repo, n, err := ParsePRRef(in)
+		if err != nil || repo != want.repo || n != want.n {
+			t.Errorf("ParsePRRef(%q) = %q, %d, %v", in, repo, n, err)
+		}
+	}
+	for _, in := range []string{"", "o/r", "https://github.com/o/r/issues/7", "https://gitlab.com/o/r/pull/7", "o/r#x", "o/r#0", "a/b/c#1"} {
+		if _, _, err := ParsePRRef(in); err == nil {
+			t.Errorf("ParsePRRef(%q) should fail", in)
+		}
+	}
+}
