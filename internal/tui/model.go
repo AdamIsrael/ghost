@@ -158,7 +158,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case engineDoneMsg:
 		m.flash = ""
 		if msg.err != nil {
-			m.flash = msg.what + ": " + msg.err.Error()
+			m.flash = msg.err.Error()
+			if !strings.HasPrefix(m.flash, msg.what+":") {
+				m.flash = msg.what + ": " + m.flash
+			}
 		}
 	case openedMsg:
 		m.flash = ""

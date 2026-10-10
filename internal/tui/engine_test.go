@@ -199,3 +199,11 @@ func TestDetailShowsApprovalState(t *testing.T) {
 		}
 	}
 }
+
+func TestFlashDoesNotRepeatPrefix(t *testing.T) {
+	m := send(t, New(Options{Views: twoViews}), tea.WindowSizeMsg{Width: 160, Height: 10},
+		engineDoneMsg{"approve", errors.New("approve: GitHub does not allow approving your own pull request")})
+	if out := screen(m); strings.Contains(out, "approve: approve:") || !strings.Contains(out, "approve: GitHub does not allow") {
+		t.Errorf("flash:\n%s", out)
+	}
+}
