@@ -289,3 +289,22 @@ func TestFailInterruptedSettlesApproving(t *testing.T) {
 		t.Errorf("got %+v", got)
 	}
 }
+
+func TestUpdateApprovalIsCompareAndSet(t *testing.T) {
+	s := openTest(t)
+	prID, _ := s.UpsertPR(pr(1, "a"))
+	s.EnqueueReview(prID, "a", "claude", false)
+	r, _ := s.ClaimNext()
+	r.State, r.Approval = Posted, ApprovalNo
+	s.SaveReview(r)
+	if ok, err := s.UpdateApproval(r.ID, ApprovalWaiting, ApprovalPending, "stale"); ok || err != nil {
+		t.Fatalf("stale update applied: %v %v", ok, err)
+	}
+	if ok, _ := s.UpdateApproval(r.ID, ApprovalNo, ApprovalWaiting, "fresh"); !ok {
+		t.Fatal("current-state update rejected")
+	}
+	got, _ := s.LatestReview("o/r", 1)
+	if got.Approval != ApprovalWaiting || got.ApprovalNote != "fresh" || got.State != Posted {
+		t.Errorf("got %+v", got)
+	}
+}

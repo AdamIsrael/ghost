@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -61,6 +62,8 @@ type Engine struct {
 	wg         sync.WaitGroup // workers and rechecks; Run waits for them
 
 	mu        sync.Mutex
+	runCtx    context.Context     // set by Run; operator actions are tied to it
+	stopping  bool                // Run is shutting down; no new tracked work
 	unknownAt map[int64]time.Time // review ID → when its approval became unknown
 	paused    bool
 	running   int
@@ -110,6 +113,9 @@ func (e *Engine) HandlePoll(r poller.Result) {
 // poll results and runs reviews until ctx is cancelled. It returns once its
 // workers have finished.
 func (e *Engine) Run(ctx context.Context) {
+	e.mu.Lock()
+	e.runCtx = ctx
+	e.mu.Unlock()
 	if rs, err := e.d.Store.FailInterrupted(e.cfg.MaxCostPerReviewUSD); err == nil {
 		for _, r := range rs {
 			if r.State == store.Failed {
@@ -129,7 +135,10 @@ func (e *Engine) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			e.wg.Wait() // let workers record interruptions before the store closes
+			e.mu.Lock()
+			e.stopping = true // no wg.Add after this point
+			e.mu.Unlock()
+			e.wg.Wait() // let workers and operator actions finish before the store closes
 			return
 		case r := <-e.polls:
 			e.enqueue(r)
@@ -405,4 +414,25 @@ func (e *Engine) PRState(repo string, number int) PRState {
 		_ = json.Unmarshal([]byte(st.Latest.Comments), &st.Comments)
 	}
 	return st
+}
+
+// op ties an operator action (post, approve) to the engine: it is cancelled
+// when the engine stops, and Run waits for it before returning.
+func (e *Engine) op(ctx context.Context) (context.Context, func(), error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopping {
+		return nil, nil, errors.New("ghost is shutting down")
+	}
+	if e.runCtx == nil { // engine not running (e.g. called directly in tests)
+		return ctx, func() {}, nil
+	}
+	e.wg.Add(1)
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(e.runCtx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+		e.wg.Done()
+	}, nil
 }

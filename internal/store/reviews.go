@@ -341,3 +341,14 @@ func (s *Store) HeadApproved(prID int64, headSHA string, exceptID int64) (bool, 
 		prID, headSHA, exceptID, ApprovalApproved, ApprovalApproving, ApprovalUnknown).Scan(&n)
 	return n > 0, err
 }
+
+// UpdateApproval sets a review's approval state and note only if its
+// approval is still from; it reports whether it did.
+func (s *Store) UpdateApproval(id int64, from, to, note string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE reviews SET approval = ?, approval_note = ? WHERE id = ? AND approval = ?`, to, note, id, from)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}

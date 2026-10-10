@@ -49,39 +49,44 @@ func (e *Engine) evaluateApproval(ctx context.Context, r *store.Review, pr *gith
 	if pr == nil {
 		d, err := e.d.GetPR(ctx, r.Repo, r.Number)
 		if err != nil {
-			e.setApproval(r, store.ApprovalWaiting, "could not read the PR's status: "+err.Error())
+			e.setApproval(r, r.Approval, store.ApprovalWaiting, "could not read the PR's status: "+err.Error())
 			return
 		}
 		pr = &d.PR
 	}
 	if pr.HeadSHA != r.HeadSHA {
-		e.setApproval(r, store.ApprovalNo, fmt.Sprintf("superseded: PR head moved to %.7s", pr.HeadSHA))
+		e.setApproval(r, r.Approval, store.ApprovalNo, fmt.Sprintf("superseded: PR head moved to %.7s", pr.HeadSHA))
 		return
 	}
 	if why := e.blockedForApproval(r); why != "" {
-		e.setApproval(r, store.ApprovalNo, why)
+		e.setApproval(r, r.Approval, store.ApprovalNo, why)
 		return
 	}
 	dec := e.decide(r, *pr)
 	switch {
 	case dec.Waiting:
-		e.setApproval(r, store.ApprovalWaiting, dec.Summary())
+		e.setApproval(r, r.Approval, store.ApprovalWaiting, dec.Summary())
 	case !dec.Eligible:
-		e.setApproval(r, store.ApprovalNo, dec.Summary())
+		e.setApproval(r, r.Approval, store.ApprovalNo, dec.Summary())
 	case e.cfg.AutoApprove.RequireConfirm:
-		e.setApproval(r, store.ApprovalPending, "meets the auto-approve rules; press a to approve")
+		e.setApproval(r, r.Approval, store.ApprovalPending, "meets the auto-approve rules; press a to approve")
 	default:
-		e.setApproval(r, store.ApprovalPending, "meets the auto-approve rules")
+		e.setApproval(r, r.Approval, store.ApprovalPending, "meets the auto-approve rules")
 		_ = e.approve(ctx, r) // outcome is audited
 	}
 }
 
-// setApproval saves an approval state and audits it if it differs from the
-// state r held before (repeats are saved but not audited again).
-func (e *Engine) setApproval(r *store.Review, state, note string) {
+// setApproval moves r's approval from `from` to state, but only if the
+// database still holds `from`: a writer holding a stale review can't
+// overwrite a newer decision (e.g. a supersede). It writes only the approval
+// columns, and audits only real changes from what r held before.
+func (e *Engine) setApproval(r *store.Review, from, state, note string) {
+	ok, err := e.d.Store.UpdateApproval(r.ID, from, state, note)
+	if err != nil || !ok {
+		return
+	}
 	changed := r.Approval != state || r.ApprovalNote != note
 	r.Approval, r.ApprovalNote = state, note
-	e.save(r)
 	if state == store.ApprovalUnknown {
 		e.mu.Lock()
 		e.unknownAt[r.ID] = e.d.Now()
@@ -141,6 +146,11 @@ func (e *Engine) recheckApprovals(ctx context.Context, res poller.Result) {
 // Approve approves a PR whose review is pending approval, or retries one
 // whose earlier approval may not have reached GitHub.
 func (e *Engine) Approve(ctx context.Context, repo string, number int) error {
+	ctx, done, err := e.op(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
 	r, err := e.d.Store.LatestReview(repo, number)
 	if err != nil {
 		return err
@@ -155,7 +165,7 @@ func (e *Engine) Approve(ctx context.Context, repo string, number int) error {
 // the rules against the PR as it is now, and posts the approval.
 func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 	if why := e.blockedForApproval(r); why != "" {
-		e.setApproval(r, store.ApprovalNo, why)
+		e.setApproval(r, r.Approval, store.ApprovalNo, why)
 		return errors.New(why)
 	}
 	from := r.Approval
@@ -172,18 +182,17 @@ func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 	marker := approvalMarker(r.ID)
 
 	if from == store.ApprovalUnknown && e.d.HasReview == nil {
-		r.Approval = from
-		e.save(r)
+		e.d.Store.UpdateApproval(r.ID, store.ApprovalApproving, from, r.ApprovalNote) // release the claim
 		return errors.New("cannot check GitHub for the earlier approval, so it is not retried")
 	}
 	if from == store.ApprovalUnknown {
 		found, err := e.d.HasReview(ctx, r.Repo, r.Number, marker)
 		if err != nil {
-			e.setApproval(r, store.ApprovalUnknown, "could not check GitHub: "+err.Error())
+			e.setApproval(r, store.ApprovalApproving, store.ApprovalUnknown, "could not check GitHub: "+err.Error())
 			return err
 		}
 		if found {
-			e.setApproval(r, store.ApprovalApproved, "found on GitHub from the earlier attempt; not approved again")
+			e.setApproval(r, store.ApprovalApproving, store.ApprovalApproved, "found on GitHub from the earlier attempt; not approved again")
 			return nil
 		}
 	}
@@ -193,15 +202,14 @@ func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 		// Nothing was sent. In auto mode fall back to waiting so the next
 		// poll tries again; with confirm, hand it back to the operator.
 		if !e.cfg.AutoApprove.RequireConfirm && from == store.ApprovalPending {
-			e.setApproval(r, store.ApprovalWaiting, "could not read the PR's status: "+err.Error())
+			e.setApproval(r, store.ApprovalApproving, store.ApprovalWaiting, "could not read the PR's status: "+err.Error())
 			return err
 		}
-		r.Approval = from
-		e.save(r)
+		e.d.Store.UpdateApproval(r.ID, store.ApprovalApproving, from, r.ApprovalNote) // release the claim
 		return err
 	}
 	if d.HeadSHA != r.HeadSHA {
-		e.setApproval(r, store.ApprovalNo, fmt.Sprintf("superseded: PR head moved to %.7s", d.HeadSHA))
+		e.setApproval(r, store.ApprovalApproving, store.ApprovalNo, fmt.Sprintf("superseded: PR head moved to %.7s", d.HeadSHA))
 		return errors.New(r.ApprovalNote)
 	}
 	if dec := e.decide(r, d.PR); !dec.Eligible {
@@ -209,7 +217,7 @@ func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 		if dec.Waiting {
 			state = store.ApprovalWaiting
 		}
-		e.setApproval(r, state, dec.Summary())
+		e.setApproval(r, store.ApprovalApproving, state, dec.Summary())
 		return fmt.Errorf("no longer meets the auto-approve rules: %s", dec.Summary())
 	}
 
@@ -217,12 +225,12 @@ func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 		r.Agent, r.HeadSHA, marker)
 	if err := e.d.Approve(ctx, r.Repo, r.Number, r.HeadSHA, body); err != nil {
 		if github.IsClientError(err) {
-			e.setApproval(r, store.ApprovalFailed, err.Error())
+			e.setApproval(r, store.ApprovalApproving, store.ApprovalFailed, err.Error())
 		} else {
-			e.setApproval(r, store.ApprovalUnknown, err.Error()+"; it may have reached GitHub, so a checks before approving again")
+			e.setApproval(r, store.ApprovalApproving, store.ApprovalUnknown, err.Error()+"; it may have reached GitHub, so a checks before approving again")
 		}
 		return err
 	}
-	e.setApproval(r, store.ApprovalApproved, "APPROVE posted")
+	e.setApproval(r, store.ApprovalApproving, store.ApprovalApproved, "APPROVE posted")
 	return nil
 }

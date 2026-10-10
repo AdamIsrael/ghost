@@ -371,3 +371,50 @@ func TestUnknownCheckFailureDoesNotRepeatAudit(t *testing.T) {
 		t.Errorf("approval = %q, want unknown (claim released)", h.approval(1))
 	}
 }
+
+func TestStaleApprovalWriteIsDropped(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.ci[1] = "PENDING"
+	h.postedReview(t)
+	stale, _ := h.st.LatestReview("o/r", 1) // waiting
+	cur, _ := h.st.LatestReview("o/r", 1)
+	h.e.setApproval(cur, store.ApprovalWaiting, store.ApprovalNo, "superseded by review #9")
+	n := len(h.e.PRState("o/r", 1).Audit)
+	h.e.setApproval(stale, store.ApprovalWaiting, store.ApprovalPending, "meets the rules")
+	if h.approval(1) != store.ApprovalNo || len(h.e.PRState("o/r", 1).Audit) != n {
+		t.Errorf("a stale writer overwrote a newer approval state: %q", h.approval(1))
+	}
+}
+
+func TestPostFromTUIIsTrackedByEngineShutdown(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() { h.e.Run(ctx); close(runDone) }()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	started := make(chan struct{})
+	h.e.d.PostReview = func(pctx context.Context, repo string, n int, p github.ReviewPost) (github.PostResult, error) {
+		close(started)
+		<-pctx.Done() // only returns when the engine is shutting down
+		time.Sleep(20 * time.Millisecond)
+		return github.PostResult{}, pctx.Err()
+	}
+	postDone := make(chan struct{})
+	go func() { h.e.PostPending(context.Background(), "o/r", 1); close(postDone) }()
+	<-started
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	select {
+	case <-postDone:
+	default:
+		t.Fatal("Run returned while a TUI-started post was still in flight")
+	}
+	if h.state(1) != store.PostUnknown {
+		t.Errorf("interrupted post should be post-unknown, got %q", h.state(1))
+	}
+}

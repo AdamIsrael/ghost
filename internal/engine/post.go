@@ -15,6 +15,11 @@ import (
 // PostPending posts a PR's finished review (state ready), or retries one
 // whose earlier post may not have reached GitHub (state post-unknown).
 func (e *Engine) PostPending(ctx context.Context, repo string, number int) error {
+	ctx, done, err := e.op(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
 	r, err := e.d.Store.LatestReview(repo, number)
 	if err != nil {
 		return err
