@@ -219,7 +219,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.opts.Engine != nil {
 			m.opts.Engine.HandlePoll(poller.Result(msg))
 		}
-		m.lastPoll = msg.At
+		if msg.Err == nil || msg.PRs != nil {
+			m.lastPoll = msg.At // a failed poll doesn't count as polled
+		}
 		if msg.Err != nil {
 			m.errs[msg.View] = msg.Err
 		} else {
@@ -302,8 +304,13 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 			m.cursor--
 		}
 	case "R":
-		if m.opts.PollNow != nil {
+		switch {
+		case m.opts.PollNow != nil:
 			m.opts.PollNow()
+		case m.opts.PollDisabled != "":
+			m.flash = m.opts.PollDisabled
+		default:
+			m.flash = "polling is not running"
 		}
 	case "r":
 		pr := m.selectedPR()
@@ -473,6 +480,9 @@ func (m Model) render() string {
 }
 
 func (m Model) handleFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
 	f, act, cmd := m.form.update(msg)
 	switch act {
 	case formCancel:
@@ -482,15 +492,15 @@ func (m Model) handleFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		v := f.view()
 		v.Source = config.ViewsFileName
 		views := append([]config.View(nil), m.views...)
-		idx := len(views)
-		if f.editing == "" {
-			views = append(views, v)
-		} else {
-			for i := range views {
-				if views[i].Name == f.editing {
-					views[i], idx = v, i
-				}
+		idx := -1
+		for i := range views {
+			if f.editing != "" && views[i].Name == f.editing {
+				views[i], idx = v, i
 			}
+		}
+		if idx < 0 { // new view (or the edited one vanished): add it
+			views = append(views, v)
+			idx = len(views) - 1
 		}
 		if err := m.opts.SaveViews(views); err != nil {
 			f.err = err.Error()
@@ -498,6 +508,7 @@ func (m Model) handleFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.views, m.form = views, nil
+		m.forgetGoneViews(f.editing)
 		m.active, m.cursor = idx, 0
 		m.flash = ""
 		if v.AutoReview {
@@ -526,6 +537,7 @@ func (m Model) handleConfirmKey(k string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.views = views
+	m.forgetGoneViews(name)
 	if m.active >= len(views) {
 		m.active = max(len(views)-1, 0)
 	}
@@ -540,4 +552,16 @@ func (m Model) viewNamed(name string) (config.View, bool) {
 		}
 	}
 	return config.View{}, false
+}
+
+// forgetGoneViews drops cached results for a view that was renamed or
+// deleted, so a later view with the same name starts fresh.
+func (m *Model) forgetGoneViews(old string) {
+	if old == "" {
+		return
+	}
+	if _, still := m.viewNamed(old); !still {
+		delete(m.prs, old)
+		delete(m.errs, old)
+	}
 }

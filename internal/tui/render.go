@@ -45,19 +45,58 @@ func block(ls []string, width, height int) string {
 }
 
 func (sty styles) renderFilterBar(views []config.View, active int, counts map[string]int, width int) string {
-	parts := []string{"Views:"}
+	labels := make([]string, len(views))
+	widths := make([]int, len(views))
 	for i, v := range views {
 		count := "…"
 		if n, ok := counts[v.Name]; ok {
 			count = fmt.Sprint(n)
 		}
 		label := fmt.Sprintf(" %s (%s) ", cleanLine(v.Name), count)
+		widths[i] = lipgloss.Width(label)
 		if i == active {
 			label = sty.activeTab.Render(label)
 		}
-		parts = append(parts, label)
+		labels[i] = label
+	}
+	// Show the widest run of tabs around the active one that fits, so the
+	// active view is never scrolled off; ‹ › mark hidden tabs.
+	lo, hi := 0, len(views)
+	if total := sum(widths) + len(widths); total > width-len("Views: ") && len(views) > 0 {
+		avail := width - len("Views: ") - 4
+		lo, hi = active, active+1
+		used := widths[active]
+		for grew := true; grew; {
+			grew = false
+			if hi < len(views) && used+widths[hi]+1 <= avail {
+				used += widths[hi] + 1
+				hi++
+				grew = true
+			}
+			if lo > 0 && used+widths[lo-1]+1 <= avail {
+				lo--
+				used += widths[lo] + 1
+				grew = true
+			}
+		}
+	}
+	parts := []string{"Views:"}
+	if lo > 0 {
+		parts = append(parts, sty.muted.Render("‹"))
+	}
+	parts = append(parts, labels[lo:hi]...)
+	if hi < len(views) {
+		parts = append(parts, sty.muted.Render("›"))
 	}
 	return fit(strings.Join(parts, " ")+"  "+sty.muted.Render("←/→ switch · n new · e edit · d delete · o open · r review · P post · a approve · p pause · R refresh · t theme · q quit"), width)
+}
+
+func sum(xs []int) int {
+	t := 0
+	for _, x := range xs {
+		t += x
+	}
+	return t
 }
 
 func (sty styles) renderRow(pr github.PR, width int, sel bool) string {
@@ -151,7 +190,12 @@ func (sty styles) renderDetail(pr *github.PR, rs engine.PRState, width, height i
 	if body == "" {
 		ls = append(ls, sty.muted.Render("(no description)"))
 	} else {
-		ls = append(ls, strings.Split(ansi.Wordwrap(body, width, " "), "\n")...)
+		lines := strings.Split(ansi.Wordwrap(body, width, " "), "\n")
+		if room := height - len(ls); room > 0 && len(lines) > room {
+			hidden := len(lines) - (room - 1)
+			lines = append(lines[:room-1], sty.muted.Render(fmt.Sprintf("… %d more lines (o opens the PR)", hidden)))
+		}
+		ls = append(ls, lines...)
 	}
 	return block(ls, width, height)
 }

@@ -137,3 +137,13 @@ func TestViewsHeaderWarnsAboutRewrites(t *testing.T) {
 		t.Errorf("header should warn that TUI saves rewrite the file: %q", viewsHeader)
 	}
 }
+
+func TestViewsFileFromNewerGhostHint(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	writeFile(t, cfg, minimal)
+	writeFile(t, filepath.Join(dir, "views.toml"), "[[view]]\nname = \"A\"\nquery = \"q\"\npriority = 2\n")
+	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), "newer version of Ghost") {
+		t.Fatalf("want newer-Ghost hint, got %v", err)
+	}
+}
