@@ -33,7 +33,11 @@ func Evaluate(c config.AutoApprove, in Input) Decision {
 	if !c.Enabled {
 		final = append(final, "auto-approve is disabled")
 	}
-	if in.PR.State != "" && in.PR.State != "OPEN" {
+	switch in.PR.State {
+	case "OPEN":
+	case "":
+		final = append(final, "PR state is unknown") // fail closed
+	default:
 		final = append(final, "PR is "+strings.ToLower(in.PR.State))
 	}
 	if in.Verdict != string(agent.Approve) {

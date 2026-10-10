@@ -16,7 +16,7 @@ func rules() config.AutoApprove {
 
 func good() Input {
 	return Input{
-		PR:       github.PR{CIState: "SUCCESS", ReviewDecision: "REVIEW_REQUIRED", Additions: 30, Deletions: 10},
+		PR:       github.PR{State: "OPEN", CIState: "SUCCESS", ReviewDecision: "REVIEW_REQUIRED", Additions: 30, Deletions: 10},
 		Verdict:  "approve",
 		Comments: []agent.InlineComment{{Severity: "nit"}},
 	}
@@ -128,5 +128,13 @@ func TestClosedPRNotEligible(t *testing.T) {
 	in.PR.State = "OPEN"
 	if !Evaluate(rules(), in).Eligible {
 		t.Error("open PR should stay eligible")
+	}
+}
+
+func TestMissingStateNotEligible(t *testing.T) {
+	in := good()
+	in.PR.State = ""
+	if d := Evaluate(rules(), in); d.Eligible || d.Waiting {
+		t.Fatalf("unknown PR state must fail closed: %+v", d)
 	}
 }

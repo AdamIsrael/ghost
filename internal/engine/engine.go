@@ -59,9 +59,10 @@ type Engine struct {
 	recheckMu  sync.Mutex     // one approval recheck at a time, off the Run loop
 	wg         sync.WaitGroup // workers and rechecks; Run waits for them
 
-	mu      sync.Mutex
-	paused  bool
-	running int
+	mu        sync.Mutex
+	unknownAt map[int64]time.Time // review ID → when its approval became unknown
+	paused    bool
+	running   int
 }
 
 func New(cfg config.Config, d Deps) *Engine {
@@ -69,11 +70,12 @@ func New(cfg config.Config, d Deps) *Engine {
 		d.Now = time.Now
 	}
 	return &Engine{
-		cfg:     cfg,
-		d:       d,
-		polls:   make(chan poller.Result, 16),
-		wake:    make(chan struct{}, 1),
-		changes: make(chan struct{}, 1),
+		cfg:       cfg,
+		d:         d,
+		polls:     make(chan poller.Result, 16),
+		wake:      make(chan struct{}, 1),
+		changes:   make(chan struct{}, 1),
+		unknownAt: map[int64]time.Time{},
 	}
 }
 

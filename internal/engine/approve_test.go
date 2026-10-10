@@ -288,6 +288,12 @@ func TestAutoModeRetriesUnknownApprovalOnPoll(t *testing.T) {
 	h.mu.Lock()
 	h.approveFn = nil
 	h.mu.Unlock()
+	greenPoll(h, 1) // too soon: GitHub may not show an in-flight review yet
+	time.Sleep(100 * time.Millisecond)
+	if h.approveCount() != 1 {
+		t.Fatal("unknown approval retried before a poll interval passed")
+	}
+	h.advance(6 * time.Minute)
 	greenPoll(h, 1)
 	waitFor(t, "approved on poll", func() bool { return h.approval(1) == store.ApprovalApproved })
 	if h.approveCount() != 2 {
@@ -345,4 +351,23 @@ func TestRecheckDoesNotBlockPolls(t *testing.T) {
 	waitFor(t, "approval in flight", func() bool { return h.approveCount() == 1 })
 	h.poll("Team", ghPR(2, "sha2")) // must be handled while the approval is stuck
 	waitFor(t, "PR 2 queued while approving", func() bool { return h.state(2) != "" })
+}
+
+func TestUnknownCheckFailureDoesNotRepeatAudit(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.approveFn = func() error { return errors.New("connection reset") }
+	h.postedReview(t)
+	h.e.Approve(context.Background(), "o/r", 1) // → unknown
+	h.mu.Lock()
+	h.hasRevErr = errors.New("HTTP 503")
+	h.mu.Unlock()
+	h.e.Approve(context.Background(), "o/r", 1)
+	n := len(h.e.PRState("o/r", 1).Audit)
+	h.e.Approve(context.Background(), "o/r", 1)
+	if got := len(h.e.PRState("o/r", 1).Audit); got != n {
+		t.Errorf("same failure audited again: %d → %d events", n, got)
+	}
+	if h.approval(1) != store.ApprovalUnknown {
+		t.Errorf("approval = %q, want unknown (claim released)", h.approval(1))
+	}
 }

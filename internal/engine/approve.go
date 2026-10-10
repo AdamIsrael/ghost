@@ -76,13 +76,20 @@ func (e *Engine) evaluateApproval(ctx context.Context, r *store.Review, pr *gith
 	}
 }
 
-// setApproval saves and audits an approval state change (repeats are silent).
+// setApproval saves an approval state and audits it if it differs from the
+// state r held before (repeats are saved but not audited again).
 func (e *Engine) setApproval(r *store.Review, state, note string) {
-	if r.Approval == state && r.ApprovalNote == note {
-		return
-	}
+	changed := r.Approval != state || r.ApprovalNote != note
 	r.Approval, r.ApprovalNote = state, note
 	e.save(r)
+	if state == store.ApprovalUnknown {
+		e.mu.Lock()
+		e.unknownAt[r.ID] = e.d.Now()
+		e.mu.Unlock()
+	}
+	if !changed {
+		return
+	}
 	kind := map[string]string{
 		store.ApprovalWaiting: "approval waiting", store.ApprovalPending: "approval pending",
 		store.ApprovalNo: "not approved", store.ApprovalApproved: "approved",
@@ -111,6 +118,14 @@ func (e *Engine) recheckApprovals(ctx context.Context, res poller.Result) {
 	for i := range rs {
 		r := &rs[i]
 		if r.Approval == store.ApprovalUnknown {
+			// Give an in-flight approval time to appear on GitHub before
+			// checking for it; otherwise a retry could approve twice.
+			e.mu.Lock()
+			at, seen := e.unknownAt[r.ID]
+			e.mu.Unlock()
+			if seen && e.d.Now().Sub(at) < e.cfg.PollInterval.Duration {
+				continue
+			}
 			_ = e.approve(ctx, r)
 			continue
 		}
@@ -151,7 +166,8 @@ func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 	if !ok {
 		return errors.New("this PR is already being approved")
 	}
-	r.Approval = store.ApprovalApproving
+	// r keeps its pre-claim state in memory so setApproval audits only real
+	// changes; the database holds "approving" until the outcome is saved.
 	e.notify()
 	marker := approvalMarker(r.ID)
 

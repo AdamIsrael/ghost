@@ -57,6 +57,8 @@ type harness struct {
 	approvals []string       // bodies passed to Approve
 	approveFn func() error
 	getPRErr  error
+	hasRevErr error
+	now       time.Time // engine clock; zero = time.Now
 	cancel    context.CancelFunc
 }
 
@@ -90,7 +92,7 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 			if !ok {
 				ci = "SUCCESS"
 			}
-			return github.PRDetail{PR: github.PR{Repo: repo, Number: n, Title: "T", BaseRef: "main", HeadSHA: h.heads[n], CIState: ci, Additions: 10}, Files: []string{"a.go"}}, nil
+			return github.PRDetail{PR: github.PR{Repo: repo, Number: n, State: "OPEN", Title: "T", BaseRef: "main", HeadSHA: h.heads[n], CIState: ci, Additions: 10}, Files: []string{"a.go"}}, nil
 		},
 		Approve: func(_ context.Context, repo string, n int, commitID, body string) error {
 			h.mu.Lock()
@@ -109,7 +111,15 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 		HasReview: func(_ context.Context, repo string, n int, marker string) (bool, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			return h.onGH, nil
+			return h.onGH, h.hasRevErr
+		},
+		Now: func() time.Time {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.now.IsZero() {
+				return time.Now()
+			}
+			return h.now
 		},
 		PostReview: func(_ context.Context, repo string, n int, p github.ReviewPost) (github.PostResult, error) {
 			h.mu.Lock()
@@ -154,7 +164,7 @@ func (h *harness) approval(n int) string {
 }
 
 func ghPR(n int, sha string) github.PR {
-	return github.PR{Repo: "o/r", Number: n, Title: "T", HeadSHA: sha, BaseRef: "main"}
+	return github.PR{Repo: "o/r", Number: n, State: "OPEN", Title: "T", HeadSHA: sha, BaseRef: "main"}
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -405,4 +415,13 @@ func TestRunWaitsForWorkers(t *testing.T) {
 	if h.state(1) != store.Failed {
 		t.Errorf("Run returned before the worker recorded the interruption (state %q)", h.state(1))
 	}
+}
+
+func (h *harness) advance(d time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.now.IsZero() {
+		h.now = time.Now()
+	}
+	h.now = h.now.Add(d)
 }

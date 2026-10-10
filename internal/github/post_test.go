@@ -18,9 +18,10 @@ type restCall struct {
 }
 
 type fakeREST struct {
-	calls   []restCall
-	errs    []error // returned in order; nil when exhausted
-	getBody string  // JSON returned for GET requests
+	calls    []restCall
+	errs     []error  // returned in order; nil when exhausted
+	getBody  string   // JSON returned for GET requests
+	getPages []string // if set, JSON for successive GETs
 }
 
 func (f *fakeREST) DoWithContext(_ context.Context, method, path string, body io.Reader, resp interface{}) error {
@@ -31,7 +32,11 @@ func (f *fakeREST) DoWithContext(_ context.Context, method, path string, body io
 	}
 	f.calls = append(f.calls, restCall{method, path, p})
 	if method == "GET" && resp != nil {
-		json.Unmarshal([]byte(f.getBody), resp)
+		body := f.getBody
+		if len(f.getPages) > 0 {
+			body, f.getPages = f.getPages[0], f.getPages[1:]
+		}
+		json.Unmarshal([]byte(body), resp)
 	}
 	if len(f.errs) == 0 {
 		return nil
@@ -135,7 +140,7 @@ func TestHasReview(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("found %v err %v", found, err)
 	}
-	if f.calls[0].method != "GET" || f.calls[0].path != "repos/o/r/pulls/7/reviews?per_page=100" {
+	if f.calls[0].method != "GET" || f.calls[0].path != "repos/o/r/pulls/7/reviews?per_page=100&page=1" {
 		t.Errorf("call = %+v", f.calls[0])
 	}
 	if found, _ := c.HasReview(context.Background(), "o/r", 7, "<!-- ghost-review-id:7 -->"); found {
@@ -177,5 +182,17 @@ func TestApproveOwnPRIsAnError(t *testing.T) {
 	}
 	if len(f.calls) != 1 {
 		t.Errorf("approval must never be retried as a comment (%d calls)", len(f.calls))
+	}
+}
+
+func TestHasReviewPagesThroughAllReviews(t *testing.T) {
+	full := "[" + strings.TrimSuffix(strings.Repeat(`{"body":"x"},`, 100), ",") + "]"
+	f := &fakeREST{getPages: []string{full, `[{"body":"ok <!-- ghost-approval-id:9 -->"}]`}}
+	found, err := New(nil).WithREST(f).HasReview(context.Background(), "o/r", 7, "<!-- ghost-approval-id:9 -->")
+	if err != nil || !found {
+		t.Fatalf("found %v err %v: marker on page 2 must be found", found, err)
+	}
+	if len(f.calls) != 2 || !strings.HasSuffix(f.calls[1].path, "page=2") {
+		t.Errorf("calls = %+v", f.calls)
 	}
 }

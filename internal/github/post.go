@@ -114,22 +114,28 @@ func foldComments(cs []ReviewComment) string {
 	return b.String()
 }
 
-// HasReview reports whether one of the PR's reviews (first 100) contains
-// marker. Ghost uses it to avoid re-posting a review whose post timed out.
+// HasReview reports whether any of the PR's reviews contains marker. Ghost
+// uses it to avoid re-posting a review or approval whose request timed out,
+// so it reads every page (reviews are listed oldest first).
 func (c *Client) HasReview(ctx context.Context, repo string, number int, marker string) (bool, error) {
-	var reviews []struct {
-		Body string `json:"body"`
-	}
-	path := fmt.Sprintf("repos/%s/pulls/%d/reviews?per_page=100", repo, number)
-	if err := c.rest.DoWithContext(ctx, "GET", path, nil, &reviews); err != nil {
-		return false, fmt.Errorf("list reviews: %w", err)
-	}
-	for _, r := range reviews {
-		if strings.Contains(r.Body, marker) {
-			return true, nil
+	const perPage = 100
+	for page := 1; ; page++ {
+		var reviews []struct {
+			Body string `json:"body"`
+		}
+		path := fmt.Sprintf("repos/%s/pulls/%d/reviews?per_page=%d&page=%d", repo, number, perPage, page)
+		if err := c.rest.DoWithContext(ctx, "GET", path, nil, &reviews); err != nil {
+			return false, fmt.Errorf("list reviews: %w", err)
+		}
+		for _, r := range reviews {
+			if strings.Contains(r.Body, marker) {
+				return true, nil
+			}
+		}
+		if len(reviews) < perPage {
+			return false, nil
 		}
 	}
-	return false, nil
 }
 
 // IsClientError reports a definite 4xx rejection: the request did not take
