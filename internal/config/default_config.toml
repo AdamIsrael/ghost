@@ -23,6 +23,12 @@ theme = "auto"
 # review_footer = "<sub>Automated review · agent `{{.Agent}}` · commit {{.HeadSHA}}</sub>"
 # approval_message = "Approved by Ghost: no blocking issues found."
 
+# Label PRs before reviewing them. When set, Ghost adds this label to a PR
+# and reviews it on the next poll. Removing the label opts the PR out (add
+# it back to resume). A view can override it with `label = "..."`, or turn
+# it off with `label = ""`. Off when empty.
+# review_label = "ai-review"
+
 default_agent = "claude"
 
 [agents.claude]

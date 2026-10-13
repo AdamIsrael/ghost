@@ -36,6 +36,7 @@ type Config struct {
 	Theme                string           `toml:"theme"`
 	ReviewFooter         string           `toml:"review_footer"`
 	ApprovalMessage      string           `toml:"approval_message"`
+	ReviewLabel          string           `toml:"review_label"`
 	DefaultAgent         string           `toml:"default_agent"`
 	Agents               map[string]Agent `toml:"agents"`
 	AutoApprove          AutoApprove      `toml:"auto_approve"`
@@ -69,6 +70,10 @@ type View struct {
 	Query      string `toml:"query"`
 	AutoReview bool   `toml:"auto_review"`
 	Agent      string `toml:"agent,omitempty"`
+
+	// Label overrides review_label for this view: nil = use review_label,
+	// "" = no label, otherwise the label to require.
+	Label *string `toml:"label,omitempty"`
 
 	// Source is the file that defined the view: "config.toml" or
 	// "views.toml". Only views.toml views are edited from the TUI.

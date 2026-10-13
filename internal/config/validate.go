@@ -47,6 +47,9 @@ func (c *Config) Validate() error {
 			add("%s: %v", m.key, err)
 		}
 	}
+	if err := checkLabel(c.ReviewLabel); err != nil {
+		add("review_label %q %v", c.ReviewLabel, err)
+	}
 	if c.AutoApprove.MaxChangedLines < 0 {
 		add("auto_approve.max_changed_lines must be 0 (no limit) or more")
 	}
@@ -124,6 +127,11 @@ func (c *Config) ValidateViews() error {
 		if v.Agent != "" {
 			if _, ok := c.Agents[v.Agent]; !ok {
 				add("%s: unknown agent %q", label, v.Agent)
+			}
+		}
+		if v.Label != nil {
+			if err := checkLabel(*v.Label); err != nil {
+				add("%s: label %q %v", label, *v.Label, err)
 			}
 		}
 	}
