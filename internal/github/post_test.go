@@ -15,6 +15,7 @@ import (
 type restCall struct {
 	method, path string
 	body         ReviewPost
+	raw          string
 }
 
 type fakeREST struct {
@@ -26,11 +27,12 @@ type fakeREST struct {
 
 func (f *fakeREST) DoWithContext(_ context.Context, method, path string, body io.Reader, resp interface{}) error {
 	var p ReviewPost
+	var raw []byte
 	if body != nil {
-		data, _ := io.ReadAll(body)
-		json.Unmarshal(data, &p)
+		raw, _ = io.ReadAll(body)
+		json.Unmarshal(raw, &p)
 	}
-	f.calls = append(f.calls, restCall{method, path, p})
+	f.calls = append(f.calls, restCall{method: method, path: path, body: p, raw: string(raw)})
 	if method == "GET" && resp != nil {
 		body := f.getBody
 		if len(f.getPages) > 0 {
@@ -194,5 +196,24 @@ func TestHasReviewPagesThroughAllReviews(t *testing.T) {
 	}
 	if len(f.calls) != 2 || !strings.HasSuffix(f.calls[1].path, "page=2") {
 		t.Errorf("calls = %+v", f.calls)
+	}
+}
+
+func TestAddLabel(t *testing.T) {
+	f := &fakeREST{}
+	if err := New(nil).WithREST(f).AddLabel(context.Background(), "o/r", 7, "ai-review"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) != 1 || f.calls[0].method != "POST" || f.calls[0].path != "repos/o/r/issues/7/labels" ||
+		f.calls[0].raw != `{"labels":["ai-review"]}` {
+		t.Errorf("calls = %+v", f.calls)
+	}
+}
+
+func TestAddLabelError(t *testing.T) {
+	f := &fakeREST{errs: []error{&api.HTTPError{StatusCode: 403, Message: "Forbidden"}}}
+	err := New(nil).WithREST(f).AddLabel(context.Background(), "o/r", 7, "ai-review")
+	if err == nil || !strings.Contains(err.Error(), `add label "ai-review"`) || !IsClientError(err) {
+		t.Errorf("err = %v", err)
 	}
 }

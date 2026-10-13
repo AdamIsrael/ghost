@@ -18,6 +18,7 @@
       "author": {"login": "octocat"},
       "repository": {"nameWithOwner": "o/r"},
       "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]},
+      "labels": {"nodes": [{"name": "ai-review"}]},
       "files": {"nodes": [{"path": "parser.go"}, {"path": "parser_test.go"}]}
     }
   }

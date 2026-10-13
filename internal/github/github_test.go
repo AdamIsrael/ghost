@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -56,8 +57,9 @@ func TestSearchPRsParsesFields(t *testing.T) {
 		HeadSHA: "abc1234def5678", ReviewDecision: "REVIEW_REQUIRED", CIState: "PENDING", State: "OPEN",
 		Additions: 120, Deletions: 30, ChangedFiles: 4,
 		UpdatedAt: time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC),
+		Labels:    []string{"ai-review", "bug"},
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("PR 0 =\n%+v\nwant\n%+v", got, want)
 	}
 	if got.Status() != status.WaitingOnCI {
@@ -138,6 +140,9 @@ func TestGetPR(t *testing.T) {
 	if d.Number != 7 || d.Title != "Fix parser" || d.HeadSHA != "deadbeef00" || d.CIState != "SUCCESS" || d.Author != "octocat" || d.State != "OPEN" {
 		t.Errorf("PR = %+v", d.PR)
 	}
+	if !reflect.DeepEqual(d.Labels, []string{"ai-review"}) {
+		t.Errorf("labels = %v", d.Labels)
+	}
 	if len(d.Files) != 2 || d.Files[0] != "parser.go" {
 		t.Errorf("files = %v", d.Files)
 	}
@@ -175,6 +180,24 @@ func TestParsePRRef(t *testing.T) {
 	for _, in := range []string{"", "o/r", "https://github.com/o/r/issues/7", "https://gitlab.com/o/r/pull/7", "o/r#x", "o/r#0", "a/b/c#1"} {
 		if _, _, err := ParsePRRef(in); err == nil {
 			t.Errorf("ParsePRRef(%q) should fail", in)
+		}
+	}
+}
+
+func TestHasLabelIgnoresCase(t *testing.T) {
+	p := PR{Labels: []string{"bug", "AI-Review"}}
+	if !p.HasLabel("ai-review") || !p.HasLabel("AI-REVIEW") {
+		t.Error("HasLabel should ignore case")
+	}
+	if p.HasLabel("ai") || (PR{}).HasLabel("ai-review") {
+		t.Error("HasLabel matched a label that isn't there")
+	}
+}
+
+func TestQueriesRequestLabels(t *testing.T) {
+	for name, q := range map[string]string{"search": searchQuery, "pr": prQuery} {
+		if !strings.Contains(q, "labels(first: 50) { nodes { name } }") {
+			t.Errorf("%s query does not fetch labels", name)
 		}
 	}
 }

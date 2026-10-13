@@ -159,3 +159,13 @@ func (c *Client) Approve(ctx context.Context, repo string, number int, commitID,
 	}
 	return nil
 }
+
+// AddLabel adds label to a PR, keeping its other labels. GitHub creates the
+// label in the repository if it doesn't exist.
+func (c *Client) AddLabel(ctx context.Context, repo string, number int, label string) error {
+	path := fmt.Sprintf("repos/%s/issues/%d/labels", repo, number)
+	if err := c.post(ctx, path, map[string][]string{"labels": {label}}); err != nil {
+		return fmt.Errorf("add label %q: %w", label, err)
+	}
+	return nil
+}

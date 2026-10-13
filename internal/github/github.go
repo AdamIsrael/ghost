@@ -36,9 +36,21 @@ type PR struct {
 	Deletions      int
 	ChangedFiles   int
 	UpdatedAt      time.Time
+	Labels         []string
 }
 
 func (p PR) Status() status.Status { return status.Derive(p.IsDraft, p.ReviewDecision, p.CIState) }
+
+// HasLabel reports whether the PR has the named label, ignoring case as
+// GitHub does.
+func (p PR) HasLabel(name string) bool {
+	for _, l := range p.Labels {
+		if strings.EqualFold(l, name) {
+			return true
+		}
+	}
+	return false
+}
 
 // GraphQL is the subset of go-gh's GraphQLClient that Client uses.
 type GraphQL interface {
@@ -74,6 +86,7 @@ const searchQuery = `query($q: String!, $first: Int!) {
         author { login }
         repository { nameWithOwner }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+        labels(first: 50) { nodes { name } }
       }
     }
   }
@@ -115,6 +128,11 @@ type prNode struct {
 			} `json:"commit"`
 		} `json:"nodes"`
 	} `json:"commits"`
+	Labels struct {
+		Nodes []struct {
+			Name string `json:"name"`
+		} `json:"nodes"`
+	} `json:"labels"`
 }
 
 // PartialError reports PRs a search matched but GitHub would not return, for
@@ -181,6 +199,9 @@ func toPR(n prNode) PR {
 	if len(n.Commits.Nodes) > 0 && n.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
 		pr.CIState = n.Commits.Nodes[0].Commit.StatusCheckRollup.State
 	}
+	for _, l := range n.Labels.Nodes {
+		pr.Labels = append(pr.Labels, l.Name)
+	}
 	return pr
 }
 
@@ -198,6 +219,7 @@ const prQuery = `query($owner: String!, $name: String!, $number: Int!) {
       author { login }
       repository { nameWithOwner }
       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      labels(first: 50) { nodes { name } }
       files(first: 100) { nodes { path } }
     }
   }

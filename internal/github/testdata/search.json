@@ -18,7 +18,8 @@
         "reviewDecision": "REVIEW_REQUIRED",
         "author": {"login": "octocat"},
         "repository": {"nameWithOwner": "o/r"},
-        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "PENDING"}}}]}
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "PENDING"}}}]},
+        "labels": {"nodes": [{"name": "ai-review"}, {"name": "bug"}]}
       },
       {},
       {
