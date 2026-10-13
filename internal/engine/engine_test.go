@@ -60,6 +60,12 @@ type harness struct {
 	hasRevErr error
 	now       time.Time // engine clock; zero = time.Now
 	cancel    context.CancelFunc
+
+	labels        map[int][]string // PR number → labels GetPR reports (AddLabel appends)
+	labelCalls    int
+	getPRCalls    map[int]int // PR number → GetPR calls
+	addLabelErr   error
+	addLabelBlock chan struct{} // if set, AddLabel waits for it to close
 }
 
 func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
@@ -76,7 +82,7 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	h := &harness{t: t, st: st, heads: map[int]string{}, ci: map[int]string{}, rev: &fakeReviewer{res: agent.ReviewResult{
+	h := &harness{t: t, st: st, heads: map[int]string{}, ci: map[int]string{}, labels: map[int][]string{}, getPRCalls: map[int]int{}, rev: &fakeReviewer{res: agent.ReviewResult{
 		Verdict: agent.RequestChanges, Summary: "Needs a nil check.", CostUSD: 0.4,
 		Comments: []agent.InlineComment{{Path: "a.go", Line: 3, Body: "nil deref", Severity: "blocking"}},
 	}}}
@@ -85,6 +91,7 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 		GetPR: func(_ context.Context, repo string, n int) (github.PRDetail, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
+			h.getPRCalls[n]++
 			if h.getPRErr != nil {
 				return github.PRDetail{}, h.getPRErr
 			}
@@ -92,7 +99,23 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 			if !ok {
 				ci = "SUCCESS"
 			}
-			return github.PRDetail{PR: github.PR{Repo: repo, Number: n, State: "OPEN", Title: "T", BaseRef: "main", HeadSHA: h.heads[n], CIState: ci, Additions: 10}, Files: []string{"a.go"}}, nil
+			return github.PRDetail{PR: github.PR{Repo: repo, Number: n, State: "OPEN", Title: "T", BaseRef: "main", HeadSHA: h.heads[n], CIState: ci, Additions: 10, Labels: append([]string(nil), h.labels[n]...)}, Files: []string{"a.go"}}, nil
+		},
+		AddLabel: func(_ context.Context, repo string, n int, label string) error {
+			h.mu.Lock()
+			h.labelCalls++
+			err, block := h.addLabelErr, h.addLabelBlock
+			h.mu.Unlock()
+			if block != nil {
+				<-block
+			}
+			if err != nil {
+				return err
+			}
+			h.mu.Lock()
+			h.labels[n] = append(h.labels[n], label)
+			h.mu.Unlock()
+			return nil
 		},
 		Approve: func(_ context.Context, repo string, n int, commitID, body string) error {
 			h.mu.Lock()
@@ -450,4 +473,36 @@ func TestResultFromOldQueryIgnored(t *testing.T) {
 	if h.state(1) != "" {
 		t.Error("a result from the view's old query must not queue paid reviews")
 	}
+}
+
+func labeledPR(n int, sha string, labels ...string) github.PR {
+	p := ghPR(n, sha)
+	p.Labels = labels
+	return p
+}
+
+func (h *harness) labelCallCount() int { h.mu.Lock(); defer h.mu.Unlock(); return h.labelCalls }
+func (h *harness) getPRCallCount(n int) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.getPRCalls[n]
+}
+func (h *harness) setLabels(n int, labels ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.labels[n] = labels
+}
+func (h *harness) labelsOf(n int) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.labels[n]...)
+}
+func (h *harness) auditCount(n int, kind string) int {
+	c := 0
+	for _, ev := range h.e.PRState("o/r", n).Audit {
+		if ev.Kind == kind {
+			c++
+		}
+	}
+	return c
 }

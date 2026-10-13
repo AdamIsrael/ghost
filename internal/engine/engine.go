@@ -28,6 +28,7 @@ type Deps struct {
 	PostReview  func(ctx context.Context, repo string, number int, p github.ReviewPost) (github.PostResult, error)
 	HasReview   func(ctx context.Context, repo string, number int, marker string) (bool, error)
 	Approve     func(ctx context.Context, repo string, number int, commitID, body string) error
+	AddLabel    func(ctx context.Context, repo string, number int, label string) error
 	Now         func() time.Time
 }
 
@@ -59,12 +60,14 @@ type Engine struct {
 	rereviewMu sync.Mutex     // serializes Rereview's check-then-enqueue
 	viewsMu    sync.RWMutex   // guards cfg.Views
 	recheckMu  sync.Mutex     // one approval recheck at a time, off the Run loop
+	labelMu    sync.Mutex     // one labeling batch at a time, off the Run loop
 	wg         sync.WaitGroup // workers and rechecks; Run waits for them
 
 	mu        sync.Mutex
 	runCtx    context.Context     // set by Run; operator actions are tied to it
 	stopping  bool                // Run is shutting down; no new tracked work
 	unknownAt map[int64]time.Time // review ID → when its approval became unknown
+	labelErr  map[int64]string    // PR ID → last "label failed" message audited
 	paused    bool
 	running   int
 }
@@ -80,6 +83,7 @@ func New(cfg config.Config, d Deps) *Engine {
 		wake:      make(chan struct{}, 1),
 		changes:   make(chan struct{}, 1),
 		unknownAt: map[int64]time.Time{},
+		labelErr:  map[int64]string{},
 	}
 }
 
@@ -141,7 +145,17 @@ func (e *Engine) Run(ctx context.Context) {
 			e.wg.Wait() // let workers and operator actions finish before the store closes
 			return
 		case r := <-e.polls:
-			e.enqueue(r)
+			if jobs := e.enqueue(r); len(jobs) > 0 && e.labelMu.TryLock() {
+				// Labeling calls GitHub; keep it off the loop. If a batch is
+				// still running, skip: nothing was recorded, so the next poll
+				// produces the same jobs.
+				e.wg.Add(1)
+				go func() {
+					defer e.wg.Done()
+					defer e.labelMu.Unlock()
+					e.labelPRs(ctx, jobs)
+				}()
+			}
 			// Rechecks may call GitHub; keep them off the loop. If one is
 			// still running, skip: the next poll carries the same PRs.
 			if e.recheckMu.TryLock() {
@@ -195,18 +209,20 @@ func (e *Engine) SetViews(views []config.View) {
 	e.viewsMu.Unlock()
 }
 
-func (e *Engine) enqueue(res poller.Result) {
+func (e *Engine) enqueue(res poller.Result) []labelJob {
 	v, ok := e.view(res.View)
 	if !ok || !v.AutoReview || res.PRs == nil {
-		return
+		return nil
 	}
 	if res.Query != "" && res.Query != v.Query {
-		return // from before the view was edited: those PRs no longer match
+		return nil // from before the view was edited: those PRs no longer match
 	}
 	agentName := v.Agent
 	if agentName == "" {
 		agentName = e.cfg.DefaultAgent
 	}
+	label := e.cfg.LabelFor(v)
+	var jobs []labelJob
 	created := false
 	for _, pr := range res.PRs {
 		if pr.IsDraft || pr.HeadSHA == "" {
@@ -214,6 +230,13 @@ func (e *Engine) enqueue(res poller.Result) {
 		}
 		prID, err := e.d.Store.UpsertPR(pr)
 		if err != nil {
+			continue
+		}
+		ok, job := e.gateLabel(prID, pr, label)
+		if job != nil {
+			jobs = append(jobs, *job)
+		}
+		if !ok {
 			continue
 		}
 		if e.enqueueAudited(prID, pr.HeadSHA, agentName, false,
@@ -225,6 +248,7 @@ func (e *Engine) enqueue(res poller.Result) {
 		e.poke()
 		e.notify()
 	}
+	return jobs
 }
 
 // enqueueAudited inserts a review and its "queued" audit row under e.mu,
