@@ -65,6 +65,13 @@ var migrations = []string{
 	`ALTER TABLE reviews ADD COLUMN approval TEXT NOT NULL DEFAULT '';
 	ALTER TABLE reviews ADD COLUMN approval_note TEXT NOT NULL DEFAULT '';
 	CREATE INDEX reviews_approval ON reviews (approval);`,
+	`CREATE TABLE pr_labels (
+		pr_id        INTEGER NOT NULL REFERENCES prs(id),
+		label        TEXT    NOT NULL,
+		added_at     TEXT    NOT NULL,
+		opted_out_at TEXT,
+		PRIMARY KEY (pr_id, label)
+	);`,
 }
 
 // Open opens (creating if needed) the database at path and applies migrations.
