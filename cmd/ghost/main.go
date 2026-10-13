@@ -40,6 +40,7 @@ type deps struct {
 	postReview  func(ctx context.Context, repo string, number int, p github.ReviewPost) (github.PostResult, error)
 	hasReview   func(ctx context.Context, repo string, number int, marker string) (bool, error)
 	approve     func(ctx context.Context, repo string, number int, commitID, body string) error
+	addLabel    func(ctx context.Context, repo string, number int, label string) error
 }
 
 func defaultDeps() deps {
@@ -83,6 +84,13 @@ func defaultDeps() deps {
 				return err
 			}
 			return c.Approve(ctx, repo, number, commitID, body)
+		},
+		addLabel: func(ctx context.Context, repo string, number int, label string) error {
+			c, err := github.NewDefault()
+			if err != nil {
+				return err
+			}
+			return c.AddLabel(ctx, repo, number, label)
 		},
 	}
 }
@@ -193,12 +201,14 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		NoColor:         os.Getenv("NO_COLOR") != "",
 		ConfigPath:      *cfgPath,
 		Themes:          themes,
+		ReviewLabel:     cfg.ReviewLabel,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	eng := engine.New(cfg, engine.Deps{
 		Store: st, GetPR: d.getPR, Checkout: d.checkout, NewReviewer: d.newReviewer,
 		PostReview: d.postReview, HasReview: d.hasReview, Approve: d.approve,
+		AddLabel: d.addLabel,
 	})
 	engineDone := make(chan struct{})
 	go func() { eng.Run(ctx); close(engineDone) }()
@@ -289,6 +299,11 @@ func runCheck(cfgPath string, stdout io.Writer, runner preflight.Runner) int {
 		fmt.Fprintf(stdout, "✗ %-7s %v\n", "config", err)
 	} else {
 		fmt.Fprintf(stdout, "✓ %-7s %s\n", "config", cfgPath)
+		if cfg.ReviewLabel == "" {
+			fmt.Fprintf(stdout, "✓ %-7s %s\n", "label", "off (PRs are reviewed without a label)")
+		} else {
+			fmt.Fprintf(stdout, "✓ %-7s %s\n", "label", cfg.ReviewLabel+" (added before review; removing it opts a PR out)")
+		}
 		if err := cfg.ValidateThemes(); err != nil {
 			ok = false
 			fmt.Fprintf(stdout, "✗ %-7s %v\n", "theme", err)

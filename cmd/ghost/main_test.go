@@ -57,7 +57,8 @@ func testDeps(runner preflight.Runner, s *fakeSearcher) (deps, *bool) {
 			}
 			return nil
 		},
-		openURL: func(string) error { return nil },
+		openURL:  func(string) error { return nil },
+		addLabel: func(context.Context, string, int, string) error { return nil },
 	}, ran
 }
 
@@ -106,6 +107,9 @@ func TestCheck(t *testing.T) {
 	out.Reset()
 	if code := run([]string{"--config", cfg, "--check"}, &out, &errb, depsFor(okRunner)); code != 0 {
 		t.Fatalf("check exit %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "label") || !strings.Contains(out.String(), "off") {
+		t.Errorf("check should report the review label as off: %q", out.String())
 	}
 
 	failGh := func(ctx context.Context, name string, args ...string) (string, error) {

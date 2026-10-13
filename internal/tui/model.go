@@ -35,6 +35,7 @@ type Options struct {
 	ConfigPath      string                    // shown when suggesting a theme setting
 	Themes          *theme.Registry           // available themes; nil = built-ins only
 	Agents          []string                  // agent names for the view form
+	ReviewLabel     string                    // review_label: the view form's default
 }
 
 // Engine is what the TUI needs from the review engine.
@@ -361,7 +362,7 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 			m.flash = "view editing is unavailable"
 			return m, nil
 		}
-		f := newViewForm(config.View{}, "", m.opts.Agents)
+		f := newViewForm(config.View{}, "", m.opts.Agents, m.opts.ReviewLabel)
 		m.form = &f
 	case "e", "d":
 		v, ok := m.currentView()
@@ -372,7 +373,7 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 		case v.Source == "config.toml":
 			m.flash = fmt.Sprintf("view %q is defined in config.toml; edit it there", v.Name)
 		case k == "e":
-			f := newViewForm(v, v.Name, m.opts.Agents)
+			f := newViewForm(v, v.Name, m.opts.Agents, m.opts.ReviewLabel)
 			m.form = &f
 		default:
 			m.confirmDelete = v.Name

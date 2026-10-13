@@ -60,6 +60,7 @@ go install github.com/AdamIsrael/ghost/cmd/ghost@latest
 
 1. **Views** are GitHub searches, such as `is:open is:pr review-requested:@me`. Ghost runs each one every `poll_interval`.
 2. For views with `auto_review = true`, each new PR commit is queued for **one** review. Drafts are skipped, and a review that fails is not retried automatically (press `r` to retry).
+   If `review_label` is set, Ghost first adds that label to the PR and reviews it on the next poll; see [Review label](#review-label).
 3. A review runs Claude Code against a temporary checkout of the PR, using your agent's prompt. Ghost then checks the result for anything that looks like a secret.
 4. With `post_mode = "confirm"` (the default), the finished review waits in the detail pane until you press **`P`** to post it. With `"auto"`, it posts right away.
 5. If `[auto_approve]` is enabled and the PR meets its rules, Ghost offers an approval (press **`a`**), or approves on its own when `require_confirm = false`.
@@ -91,7 +92,7 @@ Every step is recorded in the PR's audit trail, shown in the detail pane.
 | `t` | Cycle color themes |
 | `q` / `ctrl+c` | Quit |
 
-In the view form: `tab` moves between fields, `space` toggles auto-review, `←` `→` pick the agent, `enter` saves and `esc` cancels.
+In the view form: `tab` moves between fields, `space` toggles auto-review, `←` `→` pick the agent, type `-` in Label for no label, `enter` saves and `esc` cancels.
 
 ## Configuration
 
@@ -108,6 +109,7 @@ Ghost reads `~/.config/ghost/config.toml` (or `$XDG_CONFIG_HOME/ghost/config.tom
 | `default_agent` | `"claude"` | Agent used when a view doesn't name one |
 | `review_footer` | `""` (off) | Text added below each posted review |
 | `approval_message` | `""` (off) | Text of each approval |
+| `review_label` | `""` (off) | Label Ghost adds before reviewing; removing it opts a PR out |
 
 ### Footer and approval message
 
@@ -119,6 +121,18 @@ approval_message = "Approved by Ghost: no blocking issues found."
 ```
 
 Each post also ends with a hidden HTML comment that Ghost uses to avoid posting twice; it isn't shown on GitHub.
+
+### Review label
+
+```toml
+review_label = "ai-review"
+```
+
+With a label set, Ghost doesn't review a PR the first time it sees it. It adds the label (creating it in the repo if needed) and reviews on the next poll, which gives the author a heads-up. Removing the label opts the PR out: Ghost won't add it again or review that PR, even after new commits, until someone adds the label back. A PR that already has the label is reviewed right away.
+
+- A view can use a different label (`label = "needs-ai"`) or none (`label = ""`); in the TUI's view form, leave **Label** blank for the default or type `-` for none.
+- Adding labels needs triage or write access to the repo. If it fails, the PR isn't reviewed and the audit trail says why; Ghost retries every poll.
+- Pressing `r` reviews a PR regardless of the label.
 
 ### Agents and prompts
 
@@ -151,6 +165,7 @@ name = "Team"
 query = "is:open is:pr review-requested:@me"
 auto_review = true        # reviews start, and cost money, as soon as this is saved
 agent = "security"        # optional; defaults to default_agent
+label = "needs-ai"        # optional; overrides review_label, "" = none
 ```
 
 `[[view]]` tables in `config.toml` also work, but they're read-only in the TUI. View names must be unique across both files.

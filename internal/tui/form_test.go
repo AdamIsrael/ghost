@@ -35,7 +35,7 @@ var (
 )
 
 func TestFormFillAndSave(t *testing.T) {
-	f := newViewForm(config.View{}, "", []string{"claude", "sec"})
+	f := newViewForm(config.View{}, "", []string{"claude", "sec"}, "")
 	keys := append(typed("Mine"), tab)
 	keys = append(keys, typed("is:pr author:@me")...)
 	keys = append(keys, tab, space, tab, right, right, enter)
@@ -49,7 +49,7 @@ func TestFormFillAndSave(t *testing.T) {
 }
 
 func TestFormEditPrefillsAndTrims(t *testing.T) {
-	f := newViewForm(config.View{Name: "Team", Query: " is:pr ", AutoReview: true, Agent: "sec"}, "Team", []string{"claude", "sec"})
+	f := newViewForm(config.View{Name: "Team", Query: " is:pr ", AutoReview: true, Agent: "sec"}, "Team", []string{"claude", "sec"}, "")
 	if got := f.view(); got.Name != "Team" || got.Query != "is:pr" || !got.AutoReview || got.Agent != "sec" {
 		t.Errorf("prefill = %+v", got)
 	}
@@ -59,13 +59,13 @@ func TestFormEditPrefillsAndTrims(t *testing.T) {
 }
 
 func TestFormEscCancels(t *testing.T) {
-	if _, act := formKeys(newViewForm(config.View{}, "", nil), esc); act != formCancel {
+	if _, act := formKeys(newViewForm(config.View{}, "", nil, ""), esc); act != formCancel {
 		t.Fatalf("action = %v", act)
 	}
 }
 
 func TestFormAgentCycleIncludesDefault(t *testing.T) {
-	f := newViewForm(config.View{}, "", []string{"claude"})
+	f := newViewForm(config.View{}, "", []string{"claude"}, "")
 	f, _ = formKeys(f, tab, tab, tab, right) // to agent, cycle once
 	if f.view().Agent != "claude" {
 		t.Fatalf("agent = %q", f.view().Agent)
@@ -77,7 +77,7 @@ func TestFormAgentCycleIncludesDefault(t *testing.T) {
 }
 
 func TestFormRender(t *testing.T) {
-	f := newViewForm(config.View{Name: "Team", Query: "is:pr"}, "Team", nil)
+	f := newViewForm(config.View{Name: "Team", Query: "is:pr"}, "Team", nil, "")
 	f.err = "query is required"
 	out := ansi.Strip(f.render(testStyles, 80, 12))
 	for _, want := range []string{"Edit view", "Name", "Query", "Auto-review", "Agent", "(default)", "query is required", "enter save", "esc cancel"} {
@@ -85,16 +85,66 @@ func TestFormRender(t *testing.T) {
 			t.Errorf("render missing %q:\n%s", want, out)
 		}
 	}
-	if !strings.Contains(ansi.Strip(newViewForm(config.View{}, "", nil).render(testStyles, 80, 12)), "New view") {
+	if !strings.Contains(ansi.Strip(newViewForm(config.View{}, "", nil, "").render(testStyles, 80, 12)), "New view") {
 		t.Error("new form title missing")
 	}
 }
 
 func TestFormFieldsFitWidth(t *testing.T) {
-	f := newViewForm(config.View{Name: "cli", Query: "repo:cli/cli is:open is:pr"}, "", nil)
+	f := newViewForm(config.View{Name: "cli", Query: "repo:cli/cli is:open is:pr"}, "", nil, "")
 	for _, line := range strings.Split(ansi.Strip(f.render(testStyles, 150, 12)), "\n") {
 		if strings.HasSuffix(strings.TrimRight(line, " "), "…") {
 			t.Errorf("field overflows and is truncated: %q", line)
 		}
 	}
 }
+
+func labelField(f viewForm) viewForm {
+	f, _ = formKeys(f, tab, tab, tab, tab) // name → query → auto → agent → label
+	return f
+}
+
+func TestFormLabelStates(t *testing.T) {
+	cases := []struct {
+		typed string
+		want  *string
+	}{
+		{"", nil},
+		{"-", strPtr("")},
+		{" needs-ai ", strPtr("needs-ai")},
+	}
+	for _, tc := range cases {
+		f := labelField(newViewForm(config.View{Name: "V", Query: "q"}, "", nil, "ai-review"))
+		f, _ = formKeys(f, typed(tc.typed)...)
+		got := f.view().Label
+		if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+			t.Errorf("typed %q: label = %v, want %v", tc.typed, got, tc.want)
+		}
+	}
+}
+
+func TestFormLabelPrefill(t *testing.T) {
+	for _, tc := range []struct {
+		in   *string
+		show string
+	}{{nil, ""}, {strPtr(""), "-"}, {strPtr("needs-ai"), "needs-ai"}} {
+		f := newViewForm(config.View{Name: "V", Query: "q", Label: tc.in}, "V", nil, "ai-review")
+		if f.label.Value() != tc.show {
+			t.Errorf("prefill %v: field = %q, want %q", tc.in, f.label.Value(), tc.show)
+		}
+		if got := f.view().Label; (got == nil) != (tc.in == nil) || (got != nil && *got != *tc.in) {
+			t.Errorf("prefill %v did not round-trip: %v", tc.in, got)
+		}
+	}
+}
+
+func TestFormLabelPlaceholderShowsDefault(t *testing.T) {
+	if f := newViewForm(config.View{}, "", nil, "ai-review"); !strings.Contains(f.label.Placeholder, "ai-review") {
+		t.Errorf("placeholder = %q", f.label.Placeholder)
+	}
+	if f := newViewForm(config.View{}, "", nil, ""); !strings.Contains(f.label.Placeholder, "none") {
+		t.Errorf("placeholder = %q", f.label.Placeholder)
+	}
+}
+
+func strPtr(s string) *string { return &s }
