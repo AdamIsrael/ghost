@@ -34,7 +34,7 @@ func TestValidateLabels(t *testing.T) {
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	bad := []string{" ai", "ai ", "   ", "a,b", strings.Repeat("x", 51)}
+	bad := []string{" ai", "ai ", "   ", "a,b", "-", strings.Repeat("x", 51)}
 	for _, b := range bad {
 		cfg := mustParse(t, "review_label = \""+b+"\"\n"+minimal)
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "review_label") {

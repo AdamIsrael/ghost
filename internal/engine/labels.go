@@ -30,8 +30,14 @@ func (e *Engine) gateLabel(prID int64, pr github.PR, label string) (bool, *label
 	if pr.HasLabel(label) {
 		// Record it even if a person added it, so removing it later is an
 		// opt-out rather than a reason to add it again.
-		_ = e.d.Store.MarkLabeled(prID, label)
-		if changed, err := e.d.Store.ClearOptOut(prID, label); err == nil && changed {
+		if err := e.d.Store.MarkLabeled(prID, label); err != nil {
+			return false, nil // fail closed: skip the PR this poll
+		}
+		changed, err := e.d.Store.ClearOptOut(prID, label)
+		if err != nil {
+			return false, nil
+		}
+		if changed {
 			e.audit(prID, 0, "label re-added", label+" is back; reviews resume")
 		}
 		return true, nil
@@ -58,18 +64,26 @@ func (e *Engine) labelPRs(ctx context.Context, jobs []labelJob) {
 		if j.confirm {
 			e.confirmOptOut(jctx, j)
 		} else {
-			e.addLabel(jctx, j)
+			e.addLabel(ctx, jctx, j)
 		}
 		cancel()
 	}
 }
 
-func (e *Engine) addLabel(ctx context.Context, j labelJob) {
+func (e *Engine) addLabel(ctx, jctx context.Context, j labelJob) {
+	// The job may be stale (a person removed the label meanwhile, recorded as
+	// an opt-out): only add the label for a PR still in the never-labeled state.
+	if st, err := e.d.Store.LabelState(j.prID, j.label); err != nil || st != store.LabelNever {
+		return
+	}
 	if e.d.AddLabel == nil {
 		e.labelFailed(j.prID, "Ghost cannot add labels in this mode")
 		return
 	}
-	if err := e.d.AddLabel(ctx, j.pr.Repo, j.pr.Number, j.label); err != nil {
+	if err := e.d.AddLabel(jctx, j.pr.Repo, j.pr.Number, j.label); err != nil {
+		if ctx.Err() != nil {
+			return // shutting down, not a labeling failure
+		}
 		e.labelFailed(j.prID, err.Error())
 		return
 	}

@@ -27,6 +27,20 @@ func (h *harness) settle(t *testing.T) {
 	waitFor(t, "sentinel queued", func() bool { return h.state(99) != "" })
 }
 
+// waitLabelBatch waits until GetPR for PR n has been called at least once
+// (so a labeling batch holds labelMu) and that batch has finished.
+func (h *harness) waitLabelBatch(t *testing.T, n int) {
+	t.Helper()
+	waitFor(t, "confirm attempted", func() bool { return h.getPRCallCount(n) >= 1 })
+	waitFor(t, "label batch done", func() bool {
+		if h.e.labelMu.TryLock() {
+			h.e.labelMu.Unlock()
+			return true
+		}
+		return false
+	})
+}
+
 func TestLabelOffQueuesWithoutLabel(t *testing.T) {
 	h := newHarness(t, nil)
 	h.start()
@@ -99,7 +113,7 @@ func TestStaleSearchIsNotOptOut(t *testing.T) {
 	h.waitAudit(t, 1, "labeled")
 	// Search hasn't caught up: no label in the result, but GitHub has it.
 	h.poll("Team", ghPR(1, "sha1"))
-	waitFor(t, "confirm via GetPR", func() bool { return h.getPRCallCount(1) >= 1 })
+	h.waitLabelBatch(t, 1)
 	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
 	waitFor(t, "queued", func() bool { return h.state(1) != "" })
 	if h.auditCount(1, "opted out") != 0 {
@@ -129,9 +143,12 @@ func TestConfirmFailureDoesNotOptOut(t *testing.T) {
 	h.getPRErr = errors.New("network down")
 	h.mu.Unlock()
 	h.poll("Team", ghPR(1, "sha1"))
-	waitFor(t, "confirm attempted", func() bool { return h.getPRCallCount(1) >= 1 })
+	h.waitLabelBatch(t, 1)
 	if st, _ := h.st.LabelState(prIDOf(t, h, 1), "ai-review"); st != store.LabelAdded {
 		t.Fatalf("label state = %v after a failed confirm", st)
+	}
+	if n := h.auditCount(1, "opted out"); n != 0 {
+		t.Fatalf("opted out %d times after a failed confirm", n)
 	}
 	h.mu.Lock()
 	h.getPRErr = nil
@@ -226,4 +243,15 @@ func prIDOf(t *testing.T, h *harness, n int) int64 {
 		t.Fatal(err)
 	}
 	return id
+}
+
+func TestGateLabelFailsClosedOnStoreError(t *testing.T) {
+	h := labelHarness(t, nil)
+	if err := h.st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ok, job := h.e.gateLabel(1, labeledPR(1, "sha1", "ai-review"), "ai-review")
+	if ok || job != nil {
+		t.Fatalf("gateLabel = %v, %v with a failing store; want skip", ok, job)
+	}
 }

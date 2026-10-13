@@ -20,6 +20,8 @@ func checkLabel(s string) error {
 	switch {
 	case s == "":
 		return nil
+	case s == "-":
+		return errors.New(`must not be "-" (the view form uses it to mean no label)`)
 	case strings.TrimSpace(s) != s:
 		return errors.New("must not start or end with spaces")
 	case utf8.RuneCountInString(s) > 50:
