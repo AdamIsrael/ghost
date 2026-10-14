@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,8 +21,8 @@ type labelJob struct {
 	pr    github.PR
 	label string
 	check bool   // read the PR, then queue it or record an opt-out
-	view  string // for the "queued" audit
-	agent string
+	view  string // the view and query that produced the job; checkPR
+	query string // queues only if the view still matches
 }
 
 // gateLabel applies the review-label rules to one PR from a poll. It reports
@@ -96,7 +97,7 @@ func (e *Engine) labelPRs(ctx context.Context, jobs []labelJob) {
 		}
 		jctx, cancel := context.WithTimeout(ctx, labelTimeout)
 		if j.check {
-			e.checkPR(jctx, j)
+			e.checkPR(ctx, jctx, j)
 		} else {
 			e.addLabel(ctx, jctx, j)
 		}
@@ -111,14 +112,14 @@ func (e *Engine) addLabel(ctx, jctx context.Context, j labelJob) {
 		return
 	}
 	if e.d.AddLabel == nil {
-		e.labelFailed(j.prID, "Ghost cannot add labels in this mode")
+		e.labelProblem(j.prID, "label failed", "Ghost cannot add labels in this mode; not reviewing until the label is added")
 		return
 	}
 	if err := e.d.AddLabel(jctx, j.pr.Repo, j.pr.Number, j.label); err != nil {
 		if ctx.Err() != nil {
 			return // shutting down, not a labeling failure
 		}
-		e.labelFailed(j.prID, err.Error())
+		e.labelProblem(j.prID, "label failed", err.Error()+"; not reviewing until the label is added (retried every poll)")
 		return
 	}
 	e.mu.Lock()
@@ -129,20 +130,27 @@ func (e *Engine) addLabel(ctx, jctx context.Context, j labelJob) {
 	}
 	when := "reviews on the next poll"
 	if reviewed, err := e.d.Store.Reviewed(j.prID, j.pr.HeadSHA); err == nil && reviewed {
-		when = "this commit was already reviewed, so Ghost reviews the next new commit"
+		when = "this commit was already queued or reviewed, so Ghost reviews the next new commit"
 	}
 	e.audit(j.prID, 0, "labeled", fmt.Sprintf("added %s; %s (remove the label to opt out)", j.label, when))
 }
 
 // checkPR reads the PR directly before acting on a poll: search results can
 // lag behind label changes. If the label is gone, that's an opt-out; if it's
-// there, any opt-out is cleared and the current commit is queued. If the read
-// fails, nothing changes and a later poll tries again.
-func (e *Engine) checkPR(ctx context.Context, j labelJob) {
-	d, err := e.d.GetPR(ctx, j.pr.Repo, j.pr.Number)
+// there, any opt-out is cleared and the current commit is queued, as long as
+// the view still auto-reviews with this label. If the read fails, nothing
+// changes and a later poll tries again.
+func (e *Engine) checkPR(ctx, jctx context.Context, j labelJob) {
+	d, err := e.d.GetPR(jctx, j.pr.Repo, j.pr.Number)
 	if err != nil {
+		if ctx.Err() == nil { // not just shutting down
+			e.labelProblem(j.prID, "label check failed", "could not read the PR to check for "+j.label+": "+err.Error()+"; retried every poll")
+		}
 		return
 	}
+	e.mu.Lock()
+	delete(e.labelErr, j.prID)
+	e.mu.Unlock()
 	if !d.HasLabel(j.label) {
 		if changed, err := e.d.Store.MarkOptedOut(j.prID, j.label); err == nil && changed {
 			e.audit(j.prID, 0, "opted out", fmt.Sprintf("%s was removed; not reviewing this PR until it is added back", j.label))
@@ -162,20 +170,31 @@ func (e *Engine) checkPR(ctx context.Context, j labelJob) {
 	if d.IsDraft || d.HeadSHA == "" {
 		return
 	}
-	if e.enqueueAudited(j.prID, d.HeadSHA, j.agent,
-		false, fmt.Sprintf("view %q, agent %s, commit %.7s", j.view, j.agent, d.HeadSHA)) {
+	// The view may have changed while the read was in flight: queue only if
+	// it still auto-reviews these PRs with this label.
+	v, ok := e.view(j.view)
+	if !ok || !v.AutoReview || (j.query != "" && j.query != v.Query) || !strings.EqualFold(e.cfg.LabelFor(v), j.label) {
+		return
+	}
+	agentName := v.Agent
+	if agentName == "" {
+		agentName = e.cfg.DefaultAgent
+	}
+	if e.enqueueAudited(j.prID, d.HeadSHA, agentName,
+		false, fmt.Sprintf("view %q, agent %s, commit %.7s", v.Name, agentName, d.HeadSHA)) {
 		e.poke()
 		e.notify()
 	}
 }
 
-// labelFailed audits a labeling error, once per distinct message per PR.
-func (e *Engine) labelFailed(prID int64, msg string) {
+// labelProblem audits a label add or check failure once per distinct
+// message per PR, so a PR that fails every poll doesn't flood its history.
+func (e *Engine) labelProblem(prID int64, kind, msg string) {
 	e.mu.Lock()
 	same := e.labelErr[prID] == msg
 	e.labelErr[prID] = msg
 	e.mu.Unlock()
 	if !same {
-		e.audit(prID, 0, "label failed", msg+"; not reviewing until the label is added (retried every poll)")
+		e.audit(prID, 0, kind, msg)
 	}
 }

@@ -4,8 +4,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/github"
+	"github.com/AdamIsrael/ghost/internal/poller"
 	"github.com/AdamIsrael/ghost/internal/store"
 )
 
@@ -20,13 +23,17 @@ func labelHarness(t *testing.T, mutate func(*config.Config)) *harness {
 
 func strPtr(s string) *string { return &s }
 
-// settle sends a labeled PR 99 and waits for it to queue: every poll sent
-// before it has then been through enqueue.
+// settle sends a labeled PR 99 until it queues: every poll sent before it
+// has then been through enqueue.
 func (h *harness) settle(t *testing.T) {
 	t.Helper()
 	h.setLabels(99, "ai-review")
-	h.poll("Team", labeledPR(99, "s99", "ai-review"))
-	waitFor(t, "sentinel queued", func() bool { return h.state(99) != "" })
+	// Re-poll: a check batch still running from an earlier poll would drop
+	// the sentinel's check.
+	waitFor(t, "sentinel queued", func() bool {
+		h.poll("Team", labeledPR(99, "s99", "ai-review"))
+		return h.state(99) != ""
+	})
 }
 
 // waitCheckBatch waits until GetPR for PR n has been called at least once
@@ -287,6 +294,14 @@ func TestCheckFailureDoesNotQueue(t *testing.T) {
 	if h.state(1) != "" || h.auditCount(1, "opted out") != 0 {
 		t.Fatalf("after a failed check: state %q, opt-outs %d", h.state(1), h.auditCount(1, "opted out"))
 	}
+	waitFor(t, "more failed checks", func() bool {
+		h.poll("Team", labeledPR(1, "sha1", "ai-review"))
+		return h.getPRCallCount(1) >= 3
+	})
+	h.waitCheckBatch(t, 1)
+	if n := h.auditCount(1, "label check failed"); n != 1 {
+		t.Fatalf("label check failed audited %d times, want once", n)
+	}
 	h.mu.Lock()
 	h.getPRErr = nil
 	h.mu.Unlock()
@@ -350,5 +365,31 @@ func TestLabeledAuditWording(t *testing.T) {
 	}
 	if m := msg(2); !strings.Contains(m, "next poll") {
 		t.Errorf("unreviewed commit: %q", m)
+	}
+}
+
+func TestCheckDoesNotQueueForChangedView(t *testing.T) {
+	for name, views := range map[string][]config.View{
+		"auto-review off": {{Name: "Team", Query: "q"}, {Name: "Watch", Query: "w"}},
+		"query edited":    {{Name: "Team", Query: "q2", AutoReview: true}, {Name: "Watch", Query: "w"}},
+		"view deleted":    {{Name: "Watch", Query: "w"}},
+		"label changed":   {{Name: "Team", Query: "q", AutoReview: true, Label: strPtr("other")}, {Name: "Watch", Query: "w"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := labelHarness(t, nil)
+			h.setLabels(1, "ai-review")
+			h.heads[1] = "sha1"
+			block := make(chan struct{})
+			h.getPRBlock = block
+			h.start()
+			h.e.HandlePoll(poller.Result{View: "Team", Query: "q", PRs: []github.PR{labeledPR(1, "sha1", "ai-review")}, At: time.Now()})
+			waitFor(t, "check started", func() bool { return h.getPRCallCount(1) == 1 })
+			h.e.SetViews(views)
+			close(block)
+			h.waitCheckBatch(t, 1)
+			if h.state(1) != "" {
+				t.Errorf("queued a review after the view changed: %q", h.state(1))
+			}
+		})
 	}
 }

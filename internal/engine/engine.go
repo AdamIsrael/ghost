@@ -231,7 +231,7 @@ func (e *Engine) enqueue(res poller.Result) []labelJob {
 		}
 		ok, job := e.gateLabel(prID, pr, label)
 		if job != nil {
-			job.view, job.agent = v.Name, agentName
+			job.view, job.query = v.Name, res.Query
 			jobs = append(jobs, *job)
 		}
 		if !ok {

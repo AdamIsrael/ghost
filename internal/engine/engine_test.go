@@ -66,6 +66,7 @@ type harness struct {
 	getPRCalls    map[int]int // PR number → GetPR calls
 	addLabelErr   error
 	addLabelBlock chan struct{} // if set, AddLabel waits for it to close
+	getPRBlock    chan struct{} // if set, GetPR waits for it to close
 }
 
 func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
@@ -90,8 +91,14 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 		Store: st,
 		GetPR: func(_ context.Context, repo string, n int) (github.PRDetail, error) {
 			h.mu.Lock()
-			defer h.mu.Unlock()
 			h.getPRCalls[n]++
+			block := h.getPRBlock
+			h.mu.Unlock()
+			if block != nil {
+				<-block
+			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
 			if h.getPRErr != nil {
 				return github.PRDetail{}, h.getPRErr
 			}
