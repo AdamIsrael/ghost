@@ -170,6 +170,42 @@ label = "needs-ai"        # optional; overrides review_label, "" = none
 
 `[[view]]` tables in `config.toml` also work, but they're read-only in the TUI. View names must be unique across both files.
 
+#### View recipes
+
+A view's query is a [GitHub search](https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests). Start with `is:open is:pr` and add qualifiers; in the TUI, press `n` and paste the query. Replace `myorg`, `alice` and the other placeholders with your own.
+
+| View | Query |
+|---|---|
+| Waiting on my review | `is:open is:pr review-requested:@me` |
+| My open PRs | `is:open is:pr author:@me` |
+| Anything I'm involved in | `is:open is:pr involves:@me` |
+| A team's PRs | `is:open is:pr org:myorg author:alice author:bob author:carol` |
+| One repo | `is:open is:pr repo:myorg/api` |
+| Several repos | `is:open is:pr repo:myorg/api repo:myorg/web` |
+| A whole org, except one repo | `is:open is:pr org:myorg -repo:myorg/sandbox` |
+| Ready PRs only (no drafts) | `is:open is:pr org:myorg draft:false` |
+| No dependency bots | `is:open is:pr org:myorg -author:app/dependabot -author:app/renovate` |
+| Not reviewed by anyone yet | `is:open is:pr org:myorg review:none` |
+| Approved, ready to merge | `is:open is:pr org:myorg review:approved status:success` |
+| CI failing | `is:open is:pr org:myorg status:failure` |
+| Into one branch | `is:open is:pr repo:myorg/api base:main` |
+| Has a label | `is:open is:pr org:myorg label:needs-review` |
+| Has either label | `is:open is:pr org:myorg label:bug,security` |
+| Has no labels | `is:open is:pr org:myorg no:label` |
+| Oldest first | `is:open is:pr org:myorg sort:created-asc` |
+
+How qualifiers combine:
+
+- **Repeating `author:`, `repo:` or `org:` means any of them.** `author:alice author:bob` matches PRs by either person.
+- **Repeating `label:` means all of them; a comma means any.** `label:bug label:security` needs both labels, `label:bug,security` needs either.
+- **A leading `-` excludes**: `-author:`, `-repo:`, `-label:`.
+- **`OR` and parentheses don't work here.** `(author:alice OR author:bob)` works on github.com but matches nothing through the API Ghost uses; repeat the qualifier instead.
+- **Relative dates don't work** (`updated:>@today-7d` matches nothing), and a fixed date goes stale, so filter by state rather than time.
+- **Each view shows at most 50 PRs**, newest first. For a busy org, narrow the query (a repo, `draft:false`, `review:none`) or use `sort:` to choose which 50.
+- **Scope wide queries** with `org:` or `repo:`; without one, a query searches every repository you can see.
+
+Most of these views are for watching. Before setting `auto_review = true` on one, consider how many PRs it matches: every new commit on every match is reviewed and counts against `max_daily_cost_usd`. A [review label](#review-label) gives authors a way to opt out.
+
 ### Auto-approve
 
 ```toml
