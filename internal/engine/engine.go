@@ -68,7 +68,7 @@ type Engine struct {
 	runCtx    context.Context     // set by Run; operator actions are tied to it
 	stopping  bool                // Run is shutting down; no new tracked work
 	unknownAt map[int64]time.Time // review ID → when its approval became unknown
-	labelErr  map[int64]string    // PR ID → last "label failed" message audited
+	labelErr  map[int64]string    // PR ID → last label add/check failure audited
 	paused    bool
 	running   int
 }
