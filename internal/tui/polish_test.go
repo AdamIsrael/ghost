@@ -100,7 +100,12 @@ func TestTruncatedResultShowsPlus(t *testing.T) {
 	if out := screen(m); !strings.Contains(out, "Team (2+)") {
 		t.Errorf("truncated view should show 2+:\n%s", out)
 	}
-	// A later complete result clears it; a failed poll keeps the last state.
+	// A failed poll keeps the last state.
+	m = send(t, m, resultMsg(poller.Result{View: "Team", Err: errors.New("HTTP 502"), At: time.Now()}))
+	if out := screen(m); !strings.Contains(out, "Team (2+)") {
+		t.Errorf("a failed poll should keep 2+:\n%s", out)
+	}
+	// A later complete result clears it.
 	m = send(t, m, resultMsg(poller.Result{View: "Team", PRs: []github.PR{samplePR(1, "x")}, At: time.Now()}))
 	if out := screen(m); !strings.Contains(out, "Team (1)") || strings.Contains(out, "Team (1+)") {
 		t.Errorf("complete result should clear the +:\n%s", out)
