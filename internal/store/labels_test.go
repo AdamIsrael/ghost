@@ -92,3 +92,22 @@ func TestMigrationFromVersion3KeepsData(t *testing.T) {
 		t.Error("existing PR row was lost")
 	}
 }
+
+func TestReviewed(t *testing.T) {
+	s, pr := labelStore(t)
+	if done, err := s.Reviewed(pr, "a"); err != nil || done {
+		t.Fatalf("before any review: %v %v", done, err)
+	}
+	if _, ok, err := s.EnqueueReview(pr, "a", "claude", false); err != nil || !ok {
+		t.Fatalf("enqueue: %v %v", ok, err)
+	}
+	if done, err := s.Reviewed(pr, "a"); err != nil || !done {
+		t.Fatalf("after enqueue: %v %v", done, err)
+	}
+	if done, _ := s.Reviewed(pr, "b"); done {
+		t.Error("another commit is not reviewed")
+	}
+	if _, ok, _ := s.EnqueueReview(pr, "a", "claude", false); ok {
+		t.Error("EnqueueReview must still refuse a reviewed commit")
+	}
+}

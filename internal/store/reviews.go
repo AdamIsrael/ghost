@@ -79,17 +79,21 @@ func (s *Store) UpsertPR(pr github.PR) (int64, error) {
 	return id, err
 }
 
+// Reviewed reports whether any review (in any state) exists for the PR at
+// headSHA. Auto-review queues each commit at most once.
+func (s *Store) Reviewed(prID int64, headSHA string) (bool, error) {
+	var done bool
+	err := s.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM reviews WHERE pr_id = ? AND head_sha = ?)`, prID, headSHA).Scan(&done)
+	return done, err
+}
+
 // EnqueueReview queues a review of headSHA. Unless force is set, it does
 // nothing if any review of that head exists, whatever its state — a failed
 // review may have cost money, so it is not retried automatically.
 func (s *Store) EnqueueReview(prID int64, headSHA, agentName string, force bool) (int64, bool, error) {
 	if !force {
-		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM reviews WHERE pr_id = ? AND head_sha = ?`, prID, headSHA).Scan(&n); err != nil {
+		if done, err := s.Reviewed(prID, headSHA); err != nil || done {
 			return 0, false, err
-		}
-		if n > 0 {
-			return 0, false, nil
 		}
 	}
 	res, err := s.db.Exec(`INSERT INTO reviews (pr_id, head_sha, agent, state, created_at) VALUES (?, ?, ?, ?, ?)`,

@@ -16,7 +16,7 @@ For each poll of a view with `auto_review = true`, for each non-draft PR, with *
 | No L; Ghost added it before | Opt-out. Record it and audit `opted out` ("ai-review was removed; not reviewing") once; afterwards skip silently |
 | Adding L fails | Audit `label failed` with the error; don't queue. Retried next poll (no record is written, so the PR is still "never labeled") |
 
-- Before recording an opt-out, Ghost re-reads the PR directly (not via search): search results can lag behind label changes, and two views may poll the same PR back to back. If the label is there, or the read fails, nothing is recorded.
+- Ghost re-reads the PR directly (not via search) before queueing a new review, clearing an opt-out, or recording an opt-out, because search results can lag behind label changes and two views may poll the same PR back to back. Label there: clear any opt-out and queue the commit the direct read returned. Label gone: record the opt-out. Read fails: change nothing; a later poll tries again. Commits already reviewed need no read. (Added 2026-10-14, ghost-qz7.21.)
 - A PR that already has the label (even one a person added) is recorded, so removing it later is an opt-out.
 - "Next poll" is that view's next poll, so the delay is about `poll_interval`.
 - Label names compare case-insensitively (as on GitHub). Stored lowercase.

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/AdamIsrael/ghost/internal/config"
@@ -23,18 +24,19 @@ func strPtr(s string) *string { return &s }
 // before it has then been through enqueue.
 func (h *harness) settle(t *testing.T) {
 	t.Helper()
+	h.setLabels(99, "ai-review")
 	h.poll("Team", labeledPR(99, "s99", "ai-review"))
 	waitFor(t, "sentinel queued", func() bool { return h.state(99) != "" })
 }
 
-// waitLabelBatch waits until GetPR for PR n has been called at least once
-// (so a labeling batch holds labelMu) and that batch has finished.
-func (h *harness) waitLabelBatch(t *testing.T, n int) {
+// waitCheckBatch waits until GetPR for PR n has been called at least once
+// (so a check batch holds checkMu) and that batch has finished.
+func (h *harness) waitCheckBatch(t *testing.T, n int) {
 	t.Helper()
-	waitFor(t, "confirm attempted", func() bool { return h.getPRCallCount(n) >= 1 })
-	waitFor(t, "label batch done", func() bool {
-		if h.e.labelMu.TryLock() {
-			h.e.labelMu.Unlock()
+	waitFor(t, "check attempted", func() bool { return h.getPRCallCount(n) >= 1 })
+	waitFor(t, "check batch done", func() bool {
+		if h.e.checkMu.TryLock() {
+			h.e.checkMu.Unlock()
 			return true
 		}
 		return false
@@ -53,6 +55,7 @@ func TestLabelOffQueuesWithoutLabel(t *testing.T) {
 
 func TestLabeledPRIsQueued(t *testing.T) {
 	h := labelHarness(t, nil)
+	h.setLabels(1, "AI-Review")
 	h.start()
 	h.poll("Team", labeledPR(1, "sha1", "AI-Review"))
 	waitFor(t, "queued", func() bool { return h.state(1) != "" })
@@ -101,6 +104,7 @@ func TestReaddedLabelResumes(t *testing.T) {
 	h.setLabels(1)
 	h.poll("Team", ghPR(1, "sha1"))
 	h.waitAudit(t, 1, "opted out")
+	h.setLabels(1, "ai-review")
 	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
 	h.waitAudit(t, 1, "label re-added")
 	waitFor(t, "queued", func() bool { return h.state(1) != "" })
@@ -113,7 +117,7 @@ func TestStaleSearchIsNotOptOut(t *testing.T) {
 	h.waitAudit(t, 1, "labeled")
 	// Search hasn't caught up: no label in the result, but GitHub has it.
 	h.poll("Team", ghPR(1, "sha1"))
-	h.waitLabelBatch(t, 1)
+	h.waitCheckBatch(t, 1)
 	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
 	waitFor(t, "queued", func() bool { return h.state(1) != "" })
 	if h.auditCount(1, "opted out") != 0 {
@@ -123,10 +127,12 @@ func TestStaleSearchIsNotOptOut(t *testing.T) {
 
 func TestHumanLabelRemovedIsOptOut(t *testing.T) {
 	h := labelHarness(t, nil)
+	h.setLabels(1, "ai-review") // a person added it
 	h.start()
-	h.poll("Team", labeledPR(1, "sha1", "ai-review")) // a person added it
+	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
 	waitFor(t, "queued", func() bool { return h.state(1) != "" })
-	h.poll("Team", ghPR(1, "sha2")) // and removed it (GetPR reports no labels)
+	h.setLabels(1) // and removed it
+	h.poll("Team", ghPR(1, "sha2"))
 	h.waitAudit(t, 1, "opted out")
 	if h.labelCallCount() != 0 {
 		t.Error("Ghost re-added a label a person removed")
@@ -143,7 +149,7 @@ func TestConfirmFailureDoesNotOptOut(t *testing.T) {
 	h.getPRErr = errors.New("network down")
 	h.mu.Unlock()
 	h.poll("Team", ghPR(1, "sha1"))
-	h.waitLabelBatch(t, 1)
+	h.waitCheckBatch(t, 1)
 	if st, _ := h.st.LabelState(prIDOf(t, h, 1), "ai-review"); st != store.LabelAdded {
 		t.Fatalf("label state = %v after a failed confirm", st)
 	}
@@ -232,6 +238,7 @@ func TestSlowLabelingDoesNotBlockPolls(t *testing.T) {
 	h.start()
 	h.poll("Team", ghPR(1, "sha1"))
 	waitFor(t, "labeling started", func() bool { return h.labelCallCount() == 1 })
+	h.setLabels(2, "ai-review")
 	h.poll("Team", labeledPR(2, "sha2", "ai-review"))
 	waitFor(t, "other PR queued while labeling is stuck", func() bool { return h.state(2) != "" })
 }
@@ -253,5 +260,95 @@ func TestGateLabelFailsClosedOnStoreError(t *testing.T) {
 	ok, job := h.e.gateLabel(1, labeledPR(1, "sha1", "ai-review"), "ai-review")
 	if ok || job != nil {
 		t.Fatalf("gateLabel = %v, %v with a failing store; want skip", ok, job)
+	}
+}
+
+func TestSearchShowsRemovedLabelNoReview(t *testing.T) {
+	h := labelHarness(t, nil)
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "labeled")
+	h.setLabels(1) // removed on GitHub, but search still shows it
+	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
+	h.waitAudit(t, 1, "opted out")
+	h.settle(t)
+	if h.state(1) != "" {
+		t.Errorf("reviewed a PR whose label was removed: state %q", h.state(1))
+	}
+}
+
+func TestCheckFailureDoesNotQueue(t *testing.T) {
+	h := labelHarness(t, nil)
+	h.setLabels(1, "ai-review")
+	h.getPRErr = errors.New("network down")
+	h.start()
+	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
+	h.waitCheckBatch(t, 1)
+	if h.state(1) != "" || h.auditCount(1, "opted out") != 0 {
+		t.Fatalf("after a failed check: state %q, opt-outs %d", h.state(1), h.auditCount(1, "opted out"))
+	}
+	h.mu.Lock()
+	h.getPRErr = nil
+	h.mu.Unlock()
+	waitFor(t, "queued on retry", func() bool {
+		h.poll("Team", labeledPR(1, "sha1", "ai-review"))
+		return h.state(1) != ""
+	})
+}
+
+func TestStaleReaddIsNotTrusted(t *testing.T) {
+	h := labelHarness(t, nil)
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "labeled")
+	h.setLabels(1)
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "opted out")
+	calls := h.getPRCallCount(1)
+	// Search claims the label is back; GitHub says it isn't.
+	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
+	waitFor(t, "check ran", func() bool { return h.getPRCallCount(1) > calls })
+	h.waitCheckBatch(t, 1)
+	if st, _ := h.st.LabelState(prIDOf(t, h, 1), "ai-review"); st != store.LabelOptedOut || h.auditCount(1, "label re-added") != 0 || h.state(1) != "" {
+		t.Fatalf("stale re-add trusted: state %v, re-added %d, review %q", st, h.auditCount(1, "label re-added"), h.state(1))
+	}
+}
+
+func TestReviewedCommitNeedsNoCheck(t *testing.T) {
+	h := labelHarness(t, nil)
+	h.setLabels(1, "ai-review")
+	h.start()
+	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
+	waitFor(t, "review finished", func() bool { return h.state(1) == store.Ready })
+	calls := h.getPRCallCount(1)
+	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
+	h.settle(t)
+	if got := h.getPRCallCount(1); got != calls {
+		t.Errorf("GetPR calls for an already-reviewed commit: %d → %d", calls, got)
+	}
+}
+
+func TestLabeledAuditWording(t *testing.T) {
+	h := labelHarness(t, nil)
+	h.start()
+	if err := h.e.Rereview(ghPR(1, "sha1")); err != nil { // commit already reviewed
+		t.Fatal(err)
+	}
+	h.poll("Team", ghPR(1, "sha1"), ghPR(2, "sha2"))
+	h.waitAudit(t, 1, "labeled")
+	h.waitAudit(t, 2, "labeled")
+	msg := func(n int) string {
+		for _, ev := range h.e.PRState("o/r", n).Audit {
+			if ev.Kind == "labeled" {
+				return ev.Message
+			}
+		}
+		return ""
+	}
+	if m := msg(1); !strings.Contains(m, "next new commit") {
+		t.Errorf("reviewed commit: %q", m)
+	}
+	if m := msg(2); !strings.Contains(m, "next poll") {
+		t.Errorf("unreviewed commit: %q", m)
 	}
 }

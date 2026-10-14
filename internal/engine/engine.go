@@ -60,7 +60,8 @@ type Engine struct {
 	rereviewMu sync.Mutex     // serializes Rereview's check-then-enqueue
 	viewsMu    sync.RWMutex   // guards cfg.Views
 	recheckMu  sync.Mutex     // one approval recheck at a time, off the Run loop
-	labelMu    sync.Mutex     // one labeling batch at a time, off the Run loop
+	labelMu    sync.Mutex     // one label-adding batch at a time, off the Run loop
+	checkMu    sync.Mutex     // one label-checking batch at a time, off the Run loop
 	wg         sync.WaitGroup // workers and rechecks; Run waits for them
 
 	mu        sync.Mutex
@@ -145,17 +146,13 @@ func (e *Engine) Run(ctx context.Context) {
 			e.wg.Wait() // let workers and operator actions finish before the store closes
 			return
 		case r := <-e.polls:
-			if jobs := e.enqueue(r); len(jobs) > 0 && e.labelMu.TryLock() {
-				// Labeling calls GitHub; keep it off the loop. If a batch is
-				// still running, skip: nothing was recorded, so the next poll
-				// produces the same jobs.
-				e.wg.Add(1)
-				go func() {
-					defer e.wg.Done()
-					defer e.labelMu.Unlock()
-					e.labelPRs(ctx, jobs)
-				}()
-			}
+			// Label work calls GitHub; keep it off the loop. Adds and checks
+			// run as separate batches so a slow add can't hold up reviews. If
+			// a batch is still running, skip: nothing was recorded, so the
+			// next poll produces the same jobs.
+			adds, checks := splitLabelJobs(e.enqueue(r))
+			e.startLabelBatch(ctx, &e.labelMu, adds)
+			e.startLabelBatch(ctx, &e.checkMu, checks)
 			// Rechecks may call GitHub; keep them off the loop. If one is
 			// still running, skip: the next poll carries the same PRs.
 			if e.recheckMu.TryLock() {
@@ -234,6 +231,7 @@ func (e *Engine) enqueue(res poller.Result) []labelJob {
 		}
 		ok, job := e.gateLabel(prID, pr, label)
 		if job != nil {
+			job.view, job.agent = v.Name, agentName
 			jobs = append(jobs, *job)
 		}
 		if !ok {
