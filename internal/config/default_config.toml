@@ -29,6 +29,10 @@ theme = "auto"
 # it off with `label = ""`. Off when empty.
 # review_label = "ai-review"
 
+# How many PRs each view shows (1–100; GitHub returns at most 100 per
+# search). A view can override it with `max_prs = ...` in views.toml.
+# max_prs_per_view = 50
+
 default_agent = "claude"
 
 [agents.claude]

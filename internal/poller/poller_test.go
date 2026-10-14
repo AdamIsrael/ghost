@@ -14,17 +14,24 @@ import (
 type fakeSearcher struct {
 	mu      sync.Mutex
 	queries []string
+	limits  []int
 	fail    map[string]error
+	total   map[string]int // total matches reported per query (default 1)
 }
 
-func (f *fakeSearcher) SearchPRs(_ context.Context, q string) ([]github.PR, error) {
+func (f *fakeSearcher) SearchPRs(_ context.Context, q string, limit int) ([]github.PR, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queries = append(f.queries, q)
+	f.limits = append(f.limits, limit)
 	if err := f.fail[q]; err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return []github.PR{{Repo: "o/r", Number: len(f.queries), Title: q}}, nil
+	total, ok := f.total[q]
+	if !ok {
+		total = 1
+	}
+	return []github.PR{{Repo: "o/r", Number: len(f.queries), Title: q}}, total, nil
 }
 
 var views = []config.View{{Name: "A", Query: "qa"}, {Name: "B", Query: "qb"}}
@@ -43,7 +50,7 @@ func next(t *testing.T, p *Poller) Result {
 func TestRunPollsEveryViewImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := New(&fakeSearcher{}, views, time.Hour)
+	p := New(&fakeSearcher{}, views, time.Hour, nil)
 	go p.Run(ctx)
 	a, b := next(t, p), next(t, p)
 	if a.View != "A" || b.View != "B" {
@@ -57,7 +64,7 @@ func TestRunPollsEveryViewImmediately(t *testing.T) {
 func TestPollNowTriggersAnotherRound(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := New(&fakeSearcher{}, views, time.Hour)
+	p := New(&fakeSearcher{}, views, time.Hour, nil)
 	go p.Run(ctx)
 	next(t, p)
 	next(t, p)
@@ -68,7 +75,7 @@ func TestPollNowTriggersAnotherRound(t *testing.T) {
 }
 
 func TestPollNowNeverBlocks(t *testing.T) {
-	p := New(&fakeSearcher{}, views, time.Hour)
+	p := New(&fakeSearcher{}, views, time.Hour, nil)
 	done := make(chan struct{})
 	go func() {
 		p.PollNow()
@@ -86,7 +93,7 @@ func TestPollNowNeverBlocks(t *testing.T) {
 func TestRunReportsErrorsPerView(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := New(&fakeSearcher{fail: map[string]error{"qa": errors.New("rate limited")}}, views, time.Hour)
+	p := New(&fakeSearcher{fail: map[string]error{"qa": errors.New("rate limited")}}, views, time.Hour, nil)
 	go p.Run(ctx)
 	a, b := next(t, p), next(t, p)
 	if a.Err == nil || a.PRs != nil {
@@ -99,7 +106,7 @@ func TestRunReportsErrorsPerView(t *testing.T) {
 
 func TestRunStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := New(&fakeSearcher{}, views, time.Hour)
+	p := New(&fakeSearcher{}, views, time.Hour, nil)
 	done := make(chan struct{})
 	go func() { p.Run(ctx); close(done) }()
 	next(t, p)
@@ -123,14 +130,14 @@ func TestBackoff(t *testing.T) {
 
 type partialSearcher struct{}
 
-func (partialSearcher) SearchPRs(context.Context, string) ([]github.PR, error) {
-	return []github.PR{{Repo: "o/r", Number: 1}}, errors.New("1 PRs hidden: SAML")
+func (partialSearcher) SearchPRs(context.Context, string, int) ([]github.PR, int, error) {
+	return []github.PR{{Repo: "o/r", Number: 1}}, 2, errors.New("1 PRs hidden: SAML")
 }
 
 func TestRunPassesPartialResultsThrough(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := New(partialSearcher{}, views[:1], time.Hour)
+	p := New(partialSearcher{}, views[:1], time.Hour, nil)
 	go p.Run(ctx)
 	r := next(t, p)
 	if len(r.PRs) != 1 || r.Err == nil {
@@ -139,7 +146,7 @@ func TestRunPassesPartialResultsThrough(t *testing.T) {
 }
 
 func TestPartialResultIsNotAFailedRound(t *testing.T) {
-	p := New(partialSearcher{}, views[:1], time.Hour)
+	p := New(partialSearcher{}, views[:1], time.Hour, nil)
 	go func() {
 		for range p.Results() {
 		}
@@ -152,7 +159,7 @@ func TestPartialResultIsNotAFailedRound(t *testing.T) {
 func TestSetViewsPollsNewViews(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := New(&fakeSearcher{}, nil, time.Hour) // starts with no views
+	p := New(&fakeSearcher{}, nil, time.Hour, nil) // starts with no views
 	go p.Run(ctx)
 	p.SetViews([]config.View{{Name: "C", Query: "qc"}})
 	if r := next(t, p); r.View != "C" {
@@ -166,5 +173,34 @@ func TestSetViewsPollsNewViews(t *testing.T) {
 	}
 	if b := next(t, p); r.View != "A" || b.View != "B" {
 		t.Fatalf("views = %s,%s", r.View, b.View)
+	}
+}
+
+func TestPollUsesEachViewsLimitAndMarksTruncated(t *testing.T) {
+	f := &fakeSearcher{total: map[string]int{"qa": 31, "qb": 80}}
+	vs := []config.View{{Name: "A", Query: "qa"}, {Name: "B", Query: "qb", MaxPRs: 80}}
+	p := New(f, vs, time.Hour, (&config.Config{MaxPRsPerView: 30}).PRLimitFor)
+	go p.pollAll(context.Background())
+	a, b := next(t, p), next(t, p)
+	f.mu.Lock()
+	limits := append([]int(nil), f.limits...)
+	f.mu.Unlock()
+	if len(limits) != 2 || limits[0] != 30 || limits[1] != 80 {
+		t.Errorf("limits = %v, want [30 80]", limits)
+	}
+	if !a.Truncated || b.Truncated {
+		t.Errorf("truncated: A=%v (31 > 30) B=%v (80 of 80)", a.Truncated, b.Truncated)
+	}
+}
+
+func TestNilLimitForUsesDefault(t *testing.T) {
+	f := &fakeSearcher{}
+	p := New(f, views[:1], time.Hour, nil)
+	go p.pollAll(context.Background())
+	next(t, p)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.limits) != 1 || f.limits[0] != config.DefaultMaxPRs {
+		t.Errorf("limits = %v", f.limits)
 	}
 }

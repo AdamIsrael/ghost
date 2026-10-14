@@ -92,7 +92,7 @@ Every step is recorded in the PR's audit trail, shown in the detail pane.
 | `t` | Cycle color themes |
 | `q` / `ctrl+c` | Quit |
 
-In the view form: `tab` moves between fields, `space` toggles auto-review, `←` `→` pick the agent, type `-` in Label for no label, `enter` saves and `esc` cancels.
+In the view form: `tab` moves between fields, `space` toggles auto-review, `←` `→` pick the agent, type `-` in Label for no label, leave Max PRs blank for the default, `enter` saves and `esc` cancels.
 
 ## Configuration
 
@@ -110,6 +110,7 @@ Ghost reads `~/.config/ghost/config.toml` (or `$XDG_CONFIG_HOME/ghost/config.tom
 | `review_footer` | `""` (off) | Text added below each posted review |
 | `approval_message` | `""` (off) | Text of each approval |
 | `review_label` | `""` (off) | Label Ghost adds before reviewing; removing it opts a PR out |
+| `max_prs_per_view` | `50` | How many PRs each view shows (1–100) |
 
 ### Footer and approval message
 
@@ -166,6 +167,7 @@ query = "is:open is:pr review-requested:@me"
 auto_review = true        # reviews start, and cost money, as soon as this is saved
 agent = "security"        # optional; defaults to default_agent
 label = "needs-ai"        # optional; overrides review_label, "" = none
+max_prs = 100             # optional; overrides max_prs_per_view (1–100)
 ```
 
 `[[view]]` tables in `config.toml` also work, but they're read-only in the TUI. View names must be unique across both files.
@@ -201,7 +203,7 @@ How qualifiers combine:
 - **A leading `-` excludes**: `-author:`, `-repo:`, `-label:`.
 - **`OR` and parentheses don't work here.** `(author:alice OR author:bob)` works on github.com but matches nothing through the API Ghost uses; repeat the qualifier instead.
 - **Relative dates don't work** (`updated:>@today-7d` matches nothing), and a fixed date goes stale, so filter by state rather than time.
-- **Each view shows at most 50 PRs**, newest first. For a busy org, narrow the query (a repo, `draft:false`, `review:none`) or use `sort:` to choose which 50.
+- **Each view shows 50 PRs by default**, newest first. A tab reads `Team (50+)` when GitHub has more matches. Raise it with `max_prs` on the view or `max_prs_per_view` in `config.toml` (up to 100, GitHub's limit for one request), narrow the query (a repo, `draft:false`, `review:none`), or use `sort:` to choose which PRs come first.
 - **Scope wide queries** with `org:` or `repo:`; without one, a query searches every repository you can see.
 
 Most of these views are for watching. Before setting `auto_review = true` on one, consider how many PRs it matches: every new commit on every match is reviewed and counts against `max_daily_cost_usd`. A [review label](#review-label) gives authors a way to opt out.

@@ -37,6 +37,7 @@ type Config struct {
 	ReviewFooter         string           `toml:"review_footer"`
 	ApprovalMessage      string           `toml:"approval_message"`
 	ReviewLabel          string           `toml:"review_label"`
+	MaxPRsPerView        int              `toml:"max_prs_per_view"`
 	DefaultAgent         string           `toml:"default_agent"`
 	Agents               map[string]Agent `toml:"agents"`
 	AutoApprove          AutoApprove      `toml:"auto_approve"`
@@ -74,6 +75,8 @@ type View struct {
 	// Label overrides review_label for this view: nil = use review_label,
 	// "" = no label, otherwise the label to require.
 	Label *string `toml:"label,omitempty"`
+	// MaxPRs overrides max_prs_per_view for this view; 0 = use it.
+	MaxPRs int `toml:"max_prs,omitzero"`
 
 	// Source is the file that defined the view: "config.toml" or
 	// "views.toml". Only views.toml views are edited from the TUI.
@@ -89,6 +92,7 @@ func Default() Config {
 		MaxCostPerReviewUSD:  1.5,
 		PostMode:             "confirm",
 		Theme:                "auto",
+		MaxPRsPerView:        DefaultMaxPRs,
 		Agents:               map[string]Agent{},
 		AutoApprove: AutoApprove{
 			RequireConfirm:     true,

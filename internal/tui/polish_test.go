@@ -31,11 +31,11 @@ func TestFilterBarKeepsActiveTabVisible(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		views = append(views, config.View{Name: fmt.Sprintf("view-number-%02d", i)})
 	}
-	out := ansi.Strip(testStyles.renderFilterBar(views, 15, nil, 80))
+	out := ansi.Strip(testStyles.renderFilterBar(views, 15, nil, nil, 80))
 	if !strings.Contains(out, "view-number-15") || !strings.Contains(out, "‹") || !strings.Contains(out, "›") {
 		t.Errorf("active tab hidden or no scroll markers: %q", out)
 	}
-	if few := ansi.Strip(testStyles.renderFilterBar(views[:2], 1, nil, 120)); strings.ContainsAny(few, "‹›") {
+	if few := ansi.Strip(testStyles.renderFilterBar(views[:2], 1, nil, nil, 120)); strings.ContainsAny(few, "‹›") {
 		t.Errorf("no markers when everything fits: %q", few)
 	}
 }
@@ -91,5 +91,18 @@ func TestDeletedViewCountsCleared(t *testing.T) {
 	m = sendKeys(m, append(keys, enter)...)
 	if out := screen(m); strings.Contains(out, "Team (2)") || !strings.Contains(out, "Team (…)") {
 		t.Errorf("a re-created view must not show the old view's counts:\n%s", out)
+	}
+}
+
+func TestTruncatedResultShowsPlus(t *testing.T) {
+	m := send(t, New(Options{Views: twoViews}), tea.WindowSizeMsg{Width: 160, Height: 10},
+		resultMsg(poller.Result{View: "Team", PRs: []github.PR{samplePR(1, "x"), samplePR(2, "y")}, At: time.Now(), Truncated: true}))
+	if out := screen(m); !strings.Contains(out, "Team (2+)") {
+		t.Errorf("truncated view should show 2+:\n%s", out)
+	}
+	// A later complete result clears it; a failed poll keeps the last state.
+	m = send(t, m, resultMsg(poller.Result{View: "Team", PRs: []github.PR{samplePR(1, "x")}, At: time.Now()}))
+	if out := screen(m); !strings.Contains(out, "Team (1)") || strings.Contains(out, "Team (1+)") {
+		t.Errorf("complete result should clear the +:\n%s", out)
 	}
 }

@@ -15,8 +15,11 @@ import (
 	"github.com/AdamIsrael/ghost/internal/status"
 )
 
-// SearchLimit is the maximum number of PRs returned per view query.
-const SearchLimit = 50
+// Search result limits: GitHub returns at most 100 results per request.
+const (
+	defaultSearchLimit = 50
+	maxSearchLimit     = 100
+)
 
 type PR struct {
 	Repo           string
@@ -79,6 +82,7 @@ func NewDefault() (*Client, error) {
 
 const searchQuery = `query($q: String!, $first: Int!) {
   search(query: $q, type: ISSUE, first: $first) {
+    issueCount
     nodes {
       ... on PullRequest {
         number state title url body isDraft updatedAt additions deletions changedFiles
@@ -94,7 +98,8 @@ const searchQuery = `query($q: String!, $first: Int!) {
 
 type searchResponse struct {
 	Search struct {
-		Nodes []prNode `json:"nodes"`
+		IssueCount int      `json:"issueCount"`
+		Nodes      []prNode `json:"nodes"`
 	} `json:"search"`
 }
 
@@ -161,16 +166,23 @@ func partial(err error) *PartialError {
 	return &PartialError{Hidden: len(gqlErr.Errors), Reason: gqlErr.Errors[0].Message}
 }
 
-// SearchPRs runs a GitHub search query and returns the matching pull requests.
-// Non-PR results (issues) are dropped. If GitHub withholds some results, the
-// visible PRs are returned along with a *PartialError.
-func (c *Client) SearchPRs(ctx context.Context, query string) ([]PR, error) {
+// SearchPRs runs a GitHub search query and returns up to limit matching pull
+// requests (1–100; out-of-range values are clamped, 0 means 50) and the total
+// number of matches. Non-PR results (issues) are dropped. If GitHub withholds
+// some results, the visible PRs are returned along with a *PartialError.
+func (c *Client) SearchPRs(ctx context.Context, query string, limit int) ([]PR, int, error) {
+	switch {
+	case limit < 1:
+		limit = defaultSearchLimit
+	case limit > maxSearchLimit:
+		limit = maxSearchLimit
+	}
 	var resp searchResponse
-	vars := map[string]interface{}{"q": query, "first": SearchLimit}
+	vars := map[string]interface{}{"q": query, "first": limit}
 	err := c.gql.DoWithContext(ctx, searchQuery, vars, &resp)
 	hidden := partial(err)
 	if err != nil && hidden == nil {
-		return nil, fmt.Errorf("search: %w", err)
+		return nil, 0, fmt.Errorf("search: %w", err)
 	}
 	prs := make([]PR, 0, len(resp.Search.Nodes))
 	for _, n := range resp.Search.Nodes {
@@ -180,9 +192,9 @@ func (c *Client) SearchPRs(ctx context.Context, query string) ([]PR, error) {
 		prs = append(prs, toPR(n))
 	}
 	if hidden != nil {
-		return prs, hidden
+		return prs, resp.Search.IssueCount, hidden
 	}
-	return prs, nil
+	return prs, resp.Search.IssueCount, nil
 }
 
 func toPR(n prNode) PR {

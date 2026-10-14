@@ -44,13 +44,18 @@ func block(ls []string, width, height int) string {
 	return strings.Join(out, "\n")
 }
 
-func (sty styles) renderFilterBar(views []config.View, active int, counts map[string]int, width int) string {
+// renderFilterBar draws the view tabs. more marks views whose query matched
+// more PRs than the view fetched ("50+").
+func (sty styles) renderFilterBar(views []config.View, active int, counts map[string]int, more map[string]bool, width int) string {
 	labels := make([]string, len(views))
 	widths := make([]int, len(views))
 	for i, v := range views {
 		count := "…"
 		if n, ok := counts[v.Name]; ok {
 			count = fmt.Sprint(n)
+			if more[v.Name] {
+				count += "+"
+			}
 		}
 		label := fmt.Sprintf(" %s (%s) ", cleanLine(v.Name), count)
 		widths[i] = lipgloss.Width(label)

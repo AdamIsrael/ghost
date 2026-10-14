@@ -11,7 +11,8 @@ import (
 )
 
 type Searcher interface {
-	SearchPRs(ctx context.Context, query string) ([]github.PR, error)
+	// SearchPRs returns up to limit PRs and the total number of matches.
+	SearchPRs(ctx context.Context, query string, limit int) ([]github.PR, int, error)
 }
 
 // Result is one view's poll outcome. Err with nil PRs is a failed poll and the
@@ -22,6 +23,8 @@ type Result struct {
 	PRs   []github.PR
 	Err   error
 	At    time.Time
+	// Truncated reports that GitHub has more matches than the view's limit.
+	Truncated bool
 }
 
 type Poller struct {
@@ -29,15 +32,22 @@ type Poller struct {
 	mu       sync.Mutex // guards views
 	views    []config.View
 	interval time.Duration
+	limitFor func(config.View) int
 	results  chan Result
 	trigger  chan struct{}
 }
 
-func New(s Searcher, views []config.View, interval time.Duration) *Poller {
+// New returns a poller for views. limitFor gives each view's PR limit; nil
+// uses config.DefaultMaxPRs for every view.
+func New(s Searcher, views []config.View, interval time.Duration, limitFor func(config.View) int) *Poller {
+	if limitFor == nil {
+		limitFor = func(config.View) int { return config.DefaultMaxPRs }
+	}
 	return &Poller{
 		searcher: s,
 		views:    views,
 		interval: interval,
+		limitFor: limitFor,
 		results:  make(chan Result, 16),
 		trigger:  make(chan struct{}, 1),
 	}
@@ -92,7 +102,8 @@ func (p *Poller) pollAll(ctx context.Context) (failed bool) {
 	views := p.views
 	p.mu.Unlock()
 	for _, v := range views {
-		prs, err := p.searcher.SearchPRs(ctx, v.Query)
+		limit := p.limitFor(v)
+		prs, total, err := p.searcher.SearchPRs(ctx, v.Query, limit)
 		if ctx.Err() != nil {
 			return failed
 		}
@@ -102,7 +113,7 @@ func (p *Poller) pollAll(ctx context.Context) (failed bool) {
 			failed = true
 		}
 		select {
-		case p.results <- Result{View: v.Name, Query: v.Query, PRs: prs, Err: err, At: time.Now()}:
+		case p.results <- Result{View: v.Name, Query: v.Query, PRs: prs, Err: err, At: time.Now(), Truncated: total > limit}:
 		case <-ctx.Done():
 			return failed
 		}

@@ -39,7 +39,7 @@ func TestFitTruncatesAndPads(t *testing.T) {
 
 func TestRenderFilterBar(t *testing.T) {
 	views := []config.View{{Name: "Team"}, {Name: "Mine"}}
-	out := ansi.Strip(testStyles.renderFilterBar(views, 1, map[string]int{"Team": 3}, 80))
+	out := ansi.Strip(testStyles.renderFilterBar(views, 1, map[string]int{"Team": 3}, nil, 80))
 	if !strings.Contains(out, "Team (3)") || !strings.Contains(out, "Mine (…)") {
 		t.Errorf("filter bar = %q", out)
 	}
@@ -133,5 +133,13 @@ func TestRenderStripsControlAndEscapeSequences(t *testing.T) {
 func TestRenderStatusBarStripsControls(t *testing.T) {
 	if raw := testStyles.renderStatusBar(statusInfo{Err: "boom\r\x1b]0;title\x07"}, 100); strings.ContainsAny(raw, "\r\x07") || strings.Contains(raw, "\x1b]0") {
 		t.Errorf("status bar passed control chars: %q", raw)
+	}
+}
+
+func TestRenderFilterBarMarksTruncatedViews(t *testing.T) {
+	views := []config.View{{Name: "Team"}, {Name: "Mine"}}
+	out := ansi.Strip(testStyles.renderFilterBar(views, 0, map[string]int{"Team": 50, "Mine": 3}, map[string]bool{"Team": true}, 80))
+	if !strings.Contains(out, "Team (50+)") || !strings.Contains(out, "Mine (3)") {
+		t.Errorf("filter bar = %q", out)
 	}
 }

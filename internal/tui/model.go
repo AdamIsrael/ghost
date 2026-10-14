@@ -36,6 +36,7 @@ type Options struct {
 	Themes          *theme.Registry           // available themes; nil = built-ins only
 	Agents          []string                  // agent names for the view form
 	ReviewLabel     string                    // review_label: the view form's default
+	MaxPRsPerView   int                       // max_prs_per_view: the view form's default
 }
 
 // Engine is what the TUI needs from the review engine.
@@ -55,6 +56,7 @@ type Model struct {
 	active   int
 	cursor   int
 	prs      map[string][]github.PR
+	more     map[string]bool // view → GitHub has more matches than it fetched
 	errs     map[string]error
 	lastPoll time.Time
 	flash    string
@@ -98,7 +100,7 @@ func waitForChange(e Engine) tea.Cmd {
 }
 
 func New(o Options) Model {
-	m := Model{opts: o, prs: map[string][]github.PR{}, errs: map[string]error{},
+	m := Model{opts: o, prs: map[string][]github.PR{}, more: map[string]bool{}, errs: map[string]error{},
 		views: append([]config.View(nil), o.Views...)}
 	m.themes = o.Themes
 	if m.themes == nil {
@@ -237,6 +239,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				prs = []github.PR{}
 			}
 			m.prs[msg.View] = prs
+			m.more[msg.View] = msg.Truncated
 		}
 		m.clampCursor()
 		return m, waitForResult(m.opts.Results)
@@ -362,7 +365,7 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 			m.flash = "view editing is unavailable"
 			return m, nil
 		}
-		f := newViewForm(config.View{}, "", m.opts.Agents, m.opts.ReviewLabel)
+		f := newViewForm(config.View{}, "", m.opts.Agents, m.opts.ReviewLabel, m.opts.MaxPRsPerView)
 		m.form = &f
 	case "e", "d":
 		v, ok := m.currentView()
@@ -373,7 +376,7 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 		case v.Source == "config.toml":
 			m.flash = fmt.Sprintf("view %q is defined in config.toml; edit it there", v.Name)
 		case k == "e":
-			f := newViewForm(v, v.Name, m.opts.Agents, m.opts.ReviewLabel)
+			f := newViewForm(v, v.Name, m.opts.Agents, m.opts.ReviewLabel, m.opts.MaxPRsPerView)
 			m.form = &f
 		default:
 			m.confirmDelete = v.Name
@@ -445,7 +448,7 @@ func (m Model) render() string {
 	for name, prs := range m.prs {
 		counts[name] = len(prs)
 	}
-	top := m.sty.renderFilterBar(m.views, m.active, counts, m.width)
+	top := m.sty.renderFilterBar(m.views, m.active, counts, m.more, m.width)
 	si := statusInfo{
 		MaxDailyUSD: m.opts.MaxDailyCostUSD,
 		LastPoll:    m.lastPoll,
@@ -563,6 +566,7 @@ func (m *Model) forgetGoneViews(old string) {
 	}
 	if _, still := m.viewNamed(old); !still {
 		delete(m.prs, old)
+		delete(m.more, old)
 		delete(m.errs, old)
 	}
 }

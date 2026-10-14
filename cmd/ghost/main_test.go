@@ -28,9 +28,9 @@ type fakeSearcher struct {
 	called chan string
 }
 
-func (f *fakeSearcher) SearchPRs(_ context.Context, q string) ([]github.PR, error) {
+func (f *fakeSearcher) SearchPRs(_ context.Context, q string, _ int) ([]github.PR, int, error) {
 	f.once.Do(func() { f.called <- q })
-	return nil, nil
+	return nil, 0, nil
 }
 
 // testDeps never touches the network or a terminal. runTUI records that it

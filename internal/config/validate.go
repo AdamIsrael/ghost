@@ -50,6 +50,9 @@ func (c *Config) Validate() error {
 	if err := checkLabel(c.ReviewLabel); err != nil {
 		add("review_label %q %v", c.ReviewLabel, err)
 	}
+	if c.MaxPRsPerView < 1 || c.MaxPRsPerView > MaxPRsLimit {
+		add("max_prs_per_view must be from 1 to %d (got %d)", MaxPRsLimit, c.MaxPRsPerView)
+	}
 	if c.AutoApprove.MaxChangedLines < 0 {
 		add("auto_approve.max_changed_lines must be 0 (no limit) or more")
 	}
@@ -133,6 +136,9 @@ func (c *Config) ValidateViews() error {
 			if err := checkLabel(*v.Label); err != nil {
 				add("%s: label %q %v", label, *v.Label, err)
 			}
+		}
+		if v.MaxPRs < 0 || v.MaxPRs > MaxPRsLimit {
+			add("%s: max_prs must be from 1 to %d, or omitted for max_prs_per_view (got %d)", label, MaxPRsLimit, v.MaxPRs)
 		}
 	}
 	return errors.Join(errs...)

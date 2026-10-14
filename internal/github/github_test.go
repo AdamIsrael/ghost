@@ -43,12 +43,12 @@ func (f *fakeGQL) DoWithContext(_ context.Context, query string, vars map[string
 
 func TestSearchPRsParsesFields(t *testing.T) {
 	f := &fakeGQL{fixture: "testdata/search.json"}
-	prs, err := New(f).SearchPRs(context.Background(), "is:open is:pr review-requested:@me")
+	prs, total, err := New(f).SearchPRs(context.Background(), "is:open is:pr review-requested:@me", 50)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(prs) != 2 {
-		t.Fatalf("got %d PRs, want 2", len(prs))
+	if len(prs) != 2 || total != 120 {
+		t.Fatalf("got %d PRs (total %d), want 2 (total 120)", len(prs), total)
 	}
 	got := prs[0]
 	want := PR{
@@ -72,7 +72,7 @@ func TestSearchPRsParsesFields(t *testing.T) {
 }
 
 func TestSearchPRsSkipsNonPRNodes(t *testing.T) {
-	prs, _ := New(&fakeGQL{fixture: "testdata/search.json"}).SearchPRs(context.Background(), "q")
+	prs, _, _ := New(&fakeGQL{fixture: "testdata/search.json"}).SearchPRs(context.Background(), "q", 50)
 	for _, pr := range prs {
 		if pr.Number == 0 {
 			t.Fatalf("non-PR node leaked into results: %+v", pr)
@@ -82,9 +82,18 @@ func TestSearchPRsSkipsNonPRNodes(t *testing.T) {
 
 func TestSearchPRsSendsQueryAndLimit(t *testing.T) {
 	f := &fakeGQL{fixture: "testdata/search.json"}
-	New(f).SearchPRs(context.Background(), "repo:o/r is:open")
-	if f.vars["q"] != "repo:o/r is:open" || f.vars["first"] != SearchLimit {
+	New(f).SearchPRs(context.Background(), "repo:o/r is:open", 75)
+	if f.vars["q"] != "repo:o/r is:open" || f.vars["first"] != 75 {
 		t.Errorf("vars = %v", f.vars)
+	}
+	if !strings.Contains(f.query, "issueCount") {
+		t.Error("query does not ask for the total match count")
+	}
+	for limit, want := range map[int]int{0: 50, -3: 50, 101: 100, 1: 1, 100: 100} {
+		New(f).SearchPRs(context.Background(), "q", limit)
+		if f.vars["first"] != want {
+			t.Errorf("limit %d sent first=%v, want %d", limit, f.vars["first"], want)
+		}
 	}
 	if !strings.Contains(f.query, "search(query: $q, type: ISSUE, first: $first)") {
 		t.Errorf("unexpected query: %s", f.query)
@@ -92,7 +101,7 @@ func TestSearchPRsSendsQueryAndLimit(t *testing.T) {
 }
 
 func TestSearchPRsWrapsError(t *testing.T) {
-	_, err := New(&fakeGQL{err: errors.New("HTTP 401")}).SearchPRs(context.Background(), "q")
+	_, _, err := New(&fakeGQL{err: errors.New("HTTP 401")}).SearchPRs(context.Background(), "q", 50)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 401") || !strings.Contains(err.Error(), "search") {
 		t.Fatalf("err = %v", err)
 	}
@@ -105,7 +114,7 @@ func nodeErr(i int, msg string) api.GraphQLErrorItem {
 func TestSearchPRsKeepsVisiblePRsWhenSomeAreHidden(t *testing.T) {
 	saml := "Resource protected by organization SAML enforcement."
 	f := &fakeGQL{fixture: "testdata/search.json", partial: &api.GraphQLError{Errors: []api.GraphQLErrorItem{nodeErr(1, saml), nodeErr(3, saml)}}}
-	prs, err := New(f).SearchPRs(context.Background(), "q")
+	prs, _, err := New(f).SearchPRs(context.Background(), "q", 50)
 	if len(prs) != 2 {
 		t.Fatalf("want the 2 visible PRs, got %d (err %v)", len(prs), err)
 	}
@@ -117,7 +126,7 @@ func TestSearchPRsKeepsVisiblePRsWhenSomeAreHidden(t *testing.T) {
 
 func TestSearchPRsFailsOnQueryLevelGraphQLError(t *testing.T) {
 	f := &fakeGQL{fixture: "testdata/search.json", partial: &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Message: "Field 'x' doesn't exist", Path: []interface{}{"search"}}}}}
-	prs, err := New(f).SearchPRs(context.Background(), "q")
+	prs, _, err := New(f).SearchPRs(context.Background(), "q", 50)
 	var pe *PartialError
 	if prs != nil || err == nil || errors.As(err, &pe) {
 		t.Fatalf("query-level error should fail the search: prs=%v err=%v", prs, err)
@@ -125,7 +134,7 @@ func TestSearchPRsFailsOnQueryLevelGraphQLError(t *testing.T) {
 }
 
 func TestSearchErrorOmitsQuery(t *testing.T) {
-	_, err := New(&fakeGQL{err: errors.New("HTTP 502")}).SearchPRs(context.Background(), "repo:secret/long-query is:open")
+	_, _, err := New(&fakeGQL{err: errors.New("HTTP 502")}).SearchPRs(context.Background(), "repo:secret/long-query is:open", 50)
 	if err == nil || strings.Contains(err.Error(), "secret/long-query") || !strings.Contains(err.Error(), "HTTP 502") {
 		t.Fatalf("error should carry the cause, not the query: %v", err)
 	}

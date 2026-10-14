@@ -202,6 +202,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		ConfigPath:      *cfgPath,
 		Themes:          themes,
 		ReviewLabel:     cfg.ReviewLabel,
+		MaxPRsPerView:   cfg.MaxPRsPerView,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -227,7 +228,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		opts.PollDisabled = "GitHub unavailable: " + err.Error()
 	} else {
 		// Started even with no views: views can be added from the TUI.
-		p = poller.New(s, cfg.Views, cfg.PollInterval.Duration)
+		p = poller.New(s, cfg.Views, cfg.PollInterval.Duration, cfg.PRLimitFor)
 		go p.Run(ctx)
 		opts.Results, opts.PollNow = p.Results(), p.PollNow
 	}

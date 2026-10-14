@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -24,6 +25,7 @@ const (
 	fieldAuto
 	fieldAgent
 	fieldLabel
+	fieldMaxPRs
 	fieldCount
 )
 
@@ -36,11 +38,12 @@ type viewForm struct {
 	agents   []string // agents[0] is "" (the default agent)
 	agentIdx int
 	label    textinput.Model
+	maxPRs   textinput.Model // blank = max_prs_per_view
 	focus    int
 	err      string
 }
 
-func newViewForm(v config.View, editing string, agents []string, globalLabel string) viewForm {
+func newViewForm(v config.View, editing string, agents []string, globalLabel string, defaultMaxPRs int) viewForm {
 	f := viewForm{editing: editing, auto: v.AutoReview, agents: append([]string{""}, agents...)}
 	f.name = textinput.New()
 	f.name.Placeholder = "My reviews"
@@ -49,6 +52,15 @@ func newViewForm(v config.View, editing string, agents []string, globalLabel str
 	f.query = textinput.New()
 	f.query.Placeholder = "is:open is:pr review-requested:@me"
 	f.query.SetValue(v.Query)
+	f.maxPRs = textinput.New()
+	f.maxPRs.CharLimit = 8
+	f.maxPRs.Placeholder = "default"
+	if defaultMaxPRs > 0 {
+		f.maxPRs.Placeholder = fmt.Sprintf("%d (default)", defaultMaxPRs)
+	}
+	if v.MaxPRs > 0 {
+		f.maxPRs.SetValue(strconv.Itoa(v.MaxPRs))
+	}
 	f.label = textinput.New()
 	f.label.CharLimit = 50
 	if globalLabel != "" {
@@ -77,6 +89,7 @@ func (f *viewForm) setFocus(i int) {
 	f.name.Blur()
 	f.query.Blur()
 	f.label.Blur()
+	f.maxPRs.Blur()
 	switch f.focus {
 	case fieldName:
 		f.name.Focus()
@@ -84,10 +97,13 @@ func (f *viewForm) setFocus(i int) {
 		f.query.Focus()
 	case fieldLabel:
 		f.label.Focus()
+	case fieldMaxPRs:
+		f.maxPRs.Focus()
 	}
 }
 
 func (f viewForm) view() config.View {
+	maxPRs, _ := f.parseMaxPRs()
 	var lbl *string
 	switch s := strings.TrimSpace(f.label.Value()); s {
 	case "":
@@ -102,7 +118,18 @@ func (f viewForm) view() config.View {
 		AutoReview: f.auto,
 		Agent:      f.agents[f.agentIdx],
 		Label:      lbl,
+		MaxPRs:     maxPRs,
 	}
+}
+
+// parseMaxPRs reads the Max PRs field: blank is 0 (use max_prs_per_view).
+func (f viewForm) parseMaxPRs() (int, bool) {
+	s := strings.TrimSpace(f.maxPRs.Value())
+	if s == "" {
+		return 0, true
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil && n >= 1 && n <= config.MaxPRsLimit
 }
 
 func (f viewForm) update(msg tea.KeyPressMsg) (viewForm, formAction, tea.Cmd) {
@@ -110,6 +137,11 @@ func (f viewForm) update(msg tea.KeyPressMsg) (viewForm, formAction, tea.Cmd) {
 	case "esc":
 		return f, formCancel, nil
 	case "enter":
+		if _, ok := f.parseMaxPRs(); !ok {
+			f.err = fmt.Sprintf("Max PRs must be a number from 1 to %d, or blank for the default", config.MaxPRsLimit)
+			f.setFocus(fieldMaxPRs)
+			return f, formNone, nil
+		}
 		return f, formSave, nil
 	case "tab", "down":
 		f.setFocus(f.focus + 1)
@@ -126,6 +158,8 @@ func (f viewForm) update(msg tea.KeyPressMsg) (viewForm, formAction, tea.Cmd) {
 		f.query, cmd = f.query.Update(msg)
 	case fieldLabel:
 		f.label, cmd = f.label.Update(msg)
+	case fieldMaxPRs:
+		f.maxPRs, cmd = f.maxPRs.Update(msg)
 	case fieldAuto:
 		if msg.String() == "space" {
 			f.auto = !f.auto
@@ -155,6 +189,7 @@ func (f viewForm) render(sty styles, width, height int) string {
 	f.name.SetWidth(max(width-20, 10)) // room for the marker, label and prompt
 	f.query.SetWidth(max(width-20, 10))
 	f.label.SetWidth(max(width-20, 10))
+	f.maxPRs.SetWidth(max(width-20, 10))
 	auto := "[ ] off"
 	if f.auto {
 		auto = "[x] on (reviews cost money)"
@@ -171,6 +206,7 @@ func (f viewForm) render(sty styles, width, height int) string {
 		marker(fieldAuto) + "Auto-review " + auto,
 		marker(fieldAgent) + "Agent       ← " + agent + " →",
 		marker(fieldLabel) + "Label       " + f.label.View(),
+		marker(fieldMaxPRs) + "Max PRs     " + f.maxPRs.View(),
 		"",
 	}
 	if f.err != "" {
@@ -190,6 +226,8 @@ func (f viewForm) paste(msg tea.PasteMsg) (viewForm, tea.Cmd) {
 		f.query, cmd = f.query.Update(msg)
 	case fieldLabel:
 		f.label, cmd = f.label.Update(msg)
+	case fieldMaxPRs:
+		f.maxPRs, cmd = f.maxPRs.Update(msg)
 	}
 	return f, cmd
 }

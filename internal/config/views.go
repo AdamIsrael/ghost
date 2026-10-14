@@ -49,7 +49,7 @@ func loadViewsFile(path string) ([]View, error) {
 		for i, k := range und {
 			keys[i] = k.String()
 		}
-		return nil, fmt.Errorf("%s: unknown keys %s (only [[view]] tables with name, query, auto_review, agent and label belong here; written by a newer version of Ghost?)", path, strings.Join(keys, ", "))
+		return nil, fmt.Errorf("%s: unknown keys %s (only [[view]] tables with name, query, auto_review, agent, label and max_prs belong here; written by a newer version of Ghost?)", path, strings.Join(keys, ", "))
 	}
 	for i := range vf.View {
 		vf.View[i].Source = ViewsFileName
