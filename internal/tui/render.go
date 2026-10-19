@@ -136,7 +136,13 @@ func (sty styles) ciStyled(state string) string {
 
 func (sty styles) renderList(prs []github.PR, cursor, width, height int, empty string) string {
 	if len(prs) == 0 {
-		return block([]string{sty.muted.Render(empty)}, width, height)
+		// Wrap: an explanation (e.g. why GitHub returned nothing) can be
+		// longer than the pane is wide.
+		var ls []string
+		for _, line := range strings.Split(ansi.Wordwrap(empty, max(width-1, 10), " "), "\n") {
+			ls = append(ls, sty.muted.Render(line))
+		}
+		return block(ls, width, height)
 	}
 	start := 0
 	if cursor >= height {

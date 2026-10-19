@@ -408,6 +408,10 @@ func (m Model) emptyMessage() string {
 		return m.opts.PollDisabled
 	case m.prs[v.Name] == nil:
 		return "Loading…"
+	case m.errs[v.Name] != nil:
+		// GitHub can return nothing because of access (e.g. SAML SSO) and
+		// say why; show that instead of implying nothing matches.
+		return "No pull requests: " + cleanLine(m.errs[v.Name].Error())
 	default:
 		return "No pull requests match this view."
 	}

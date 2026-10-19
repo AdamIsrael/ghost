@@ -205,6 +205,7 @@ How qualifiers combine:
 - **Relative dates don't work** (`updated:>@today-7d` matches nothing), and a fixed date goes stale, so filter by state rather than time.
 - **Each view shows 50 PRs by default**, newest first. A tab reads `Team (50+)` when GitHub has more matches. Raise it with `max_prs` on the view or `max_prs_per_view` in `config.toml` (up to 100, GitHub's limit for one request), narrow the query (a repo, `draft:false`, `review:none`), or use `sort:` to choose which PRs come first.
 - **Scope wide queries** with `org:` or `repo:`; without one, a query searches every repository you can see.
+- **An empty org view may mean access, not an empty org.** If an organization enforces SAML single sign-on and your `gh` login isn't authorized for it, GitHub returns nothing; Ghost shows GitHub's reason in the view. Run `gh auth refresh -h github.com` and authorize the organization.
 
 Most of these views are for watching. Before setting `auto_review = true` on one, consider how many PRs it matches: every new commit on every match is reviewed and counts against `max_daily_cost_usd`. A [review label](#review-label) gives authors a way to opt out.
 

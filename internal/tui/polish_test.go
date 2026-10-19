@@ -111,3 +111,18 @@ func TestTruncatedResultShowsPlus(t *testing.T) {
 		t.Errorf("complete result should clear the +:\n%s", out)
 	}
 }
+
+func TestBlockedSearchExplainsEmptyView(t *testing.T) {
+	why := &github.SearchBlockedError{Reason: "Access to the requested organization (acme) is blocked by SAML single sign-on.", SAML: true}
+	m := send(t, New(Options{Views: twoViews}), tea.WindowSizeMsg{Width: 200, Height: 12},
+		resultMsg(poller.Result{View: "Team", PRs: []github.PR{}, Err: why, At: time.Now()}))
+	out := screen(m)
+	if strings.Contains(out, "No pull requests match this view") || !strings.Contains(out, "blocked by SAML") {
+		t.Errorf("empty view should say why:\n%s", out)
+	}
+	// The narrow list pane wraps the message so the fix stays visible.
+	m = send(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
+	if out := screen(m); !strings.Contains(out, "gh auth refresh") {
+		t.Errorf("the fix hint should be visible in a narrow pane:\n%s", out)
+	}
+}

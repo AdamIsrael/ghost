@@ -169,7 +169,9 @@ func partial(err error) *PartialError {
 // SearchPRs runs a GitHub search query and returns up to limit matching pull
 // requests (1–100; out-of-range values are clamped, 0 means 50) and the total
 // number of matches. Non-PR results (issues) are dropped. If GitHub withholds
-// some results, the visible PRs are returned along with a *PartialError.
+// some results, the visible PRs are returned along with a *PartialError; if a
+// search matches nothing because of access (e.g. SAML SSO), an empty list is
+// returned with a *SearchBlockedError.
 func (c *Client) SearchPRs(ctx context.Context, query string, limit int) ([]PR, int, error) {
 	switch {
 	case limit < 1:
@@ -193,6 +195,14 @@ func (c *Client) SearchPRs(ctx context.Context, query string, limit int) ([]PR, 
 	}
 	if hidden != nil {
 		return prs, resp.Search.IssueCount, hidden
+	}
+	if resp.Search.IssueCount == 0 && len(prs) == 0 {
+		// GraphQL search drops results the token can't see without saying
+		// so; REST search names the problem. prs stays non-nil, so this is
+		// a warning rather than a failed poll.
+		if why := c.explainEmpty(ctx, query); why != nil {
+			return prs, 0, why
+		}
 	}
 	return prs, resp.Search.IssueCount, nil
 }
