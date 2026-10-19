@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
@@ -81,5 +82,56 @@ func TestNonEmptySearchDoesNotProbe(t *testing.T) {
 	New(&fakeGQL{fixture: "testdata/search.json"}).WithREST(rest).SearchPRs(context.Background(), "q", 50)
 	if len(rest.calls) != 0 {
 		t.Errorf("probed a search that had results: %+v", rest.calls)
+	}
+}
+
+func TestUnscopedEmptySearchDoesNotProbe(t *testing.T) {
+	rest := &fakeREST{errs: []error{searchErr422(samlMsg)}}
+	if _, _, err := emptySearch(rest).SearchPRs(context.Background(), "is:open is:pr review-requested:@me", 50); err != nil || len(rest.calls) != 0 {
+		t.Errorf("a query without org/repo/user/owner can't be blocked: err %v, calls %d", err, len(rest.calls))
+	}
+	for _, q := range []string{"is:pr repo:o/r", "is:pr user:x", "is:pr OWNER:x", "is:pr -org:x"} {
+		rest := &fakeREST{}
+		emptySearch(rest).SearchPRs(context.Background(), q, 50)
+		if len(rest.calls) != 1 {
+			t.Errorf("%q: want a probe, got %d calls", q, len(rest.calls))
+		}
+	}
+}
+
+func TestProbeResultIsCached(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	rest := &fakeREST{errs: []error{searchErr422(samlMsg), searchErr422(samlMsg)}}
+	c := emptySearch(rest)
+	c.now = func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		if _, _, err := c.SearchPRs(context.Background(), "is:pr org:acme", 50); err == nil {
+			t.Fatalf("poll %d: lost the cached explanation", i)
+		}
+	}
+	if len(rest.calls) != 1 {
+		t.Fatalf("probes within the cache window = %d, want 1", len(rest.calls))
+	}
+	now = now.Add(probeTTL + time.Second)
+	c.SearchPRs(context.Background(), "is:pr org:acme", 50)
+	if len(rest.calls) != 2 {
+		t.Errorf("probes after the window = %d, want 2", len(rest.calls))
+	}
+	// A quiet outcome is cached too, so legitimately empty views don't re-probe.
+	quiet := &fakeREST{getBody: `{"total_count":0}`}
+	c2 := emptySearch(quiet)
+	c2.SearchPRs(context.Background(), "is:pr org:empty", 50)
+	c2.SearchPRs(context.Background(), "is:pr org:empty", 50)
+	if len(quiet.calls) != 1 {
+		t.Errorf("quiet outcome re-probed: %d calls", len(quiet.calls))
+	}
+}
+
+func TestCancelledSearchDoesNotProbe(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rest := &fakeREST{errs: []error{searchErr422(samlMsg)}}
+	if _, _, err := emptySearch(rest).SearchPRs(ctx, "is:pr org:acme", 50); err != nil || len(rest.calls) != 0 {
+		t.Errorf("cancelled: err %v calls %d", err, len(rest.calls))
 	}
 }

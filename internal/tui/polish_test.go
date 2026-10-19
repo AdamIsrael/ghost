@@ -126,3 +126,13 @@ func TestBlockedSearchExplainsEmptyView(t *testing.T) {
 		t.Errorf("the fix hint should be visible in a narrow pane:\n%s", out)
 	}
 }
+
+func TestBlockedViewIsAWarningInStatusBar(t *testing.T) {
+	why := &github.SearchBlockedError{Reason: "Access to the requested organization (acme) is blocked by SAML single sign-on.", SAML: true}
+	m := send(t, New(Options{Views: twoViews}), tea.WindowSizeMsg{Width: 200, Height: 12},
+		resultMsg(poller.Result{View: twoViews[0].Name, PRs: []github.PR{}, Err: why, At: time.Now()}),
+		resultMsg(poller.Result{View: twoViews[1].Name, Err: errors.New("HTTP 502"), At: time.Now()}))
+	if out := screen(m); !strings.Contains(out, twoViews[1].Name+": HTTP 502") {
+		t.Errorf("a real failure in another view must outrank a blocked view:\n%s", out)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -63,6 +64,10 @@ type GraphQL interface {
 type Client struct {
 	gql  GraphQL
 	rest REST
+
+	now     func() time.Time // for the probe cache; nil = time.Now
+	probeMu sync.Mutex
+	probed  map[string]probeResult // query → why it matched nothing
 }
 
 func New(gql GraphQL) *Client { return &Client{gql: gql} }

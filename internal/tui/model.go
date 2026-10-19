@@ -424,15 +424,18 @@ func (m Model) statusErr() string {
 	if m.flash != "" {
 		return m.flash
 	}
-	// A view that failed outright outranks one that only hid some PRs.
+	// A view that failed outright outranks a warning.
 	var warning string
 	for _, v := range m.views {
 		err := m.errs[v.Name]
 		if err == nil {
 			continue
 		}
+		// Hidden PRs and access-blocked searches are warnings: they repeat
+		// every poll, so they mustn't mask a real failure in another view.
 		var pe *github.PartialError
-		if !errors.As(err, &pe) {
+		var be *github.SearchBlockedError
+		if !errors.As(err, &pe) && !errors.As(err, &be) {
 			return fmt.Sprintf("%s: %v", v.Name, err)
 		}
 		if warning == "" {
