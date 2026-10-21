@@ -58,7 +58,7 @@ go install github.com/AdamIsrael/ghost/cmd/ghost@latest
 
 ## How it works
 
-1. **Views** are GitHub searches, such as `is:open is:pr review-requested:@me`. Ghost runs each one every `poll_interval`.
+1. **Views** are GitHub searches, such as `is:open is:pr review-requested:@me`. Ghost runs each one every `poll_interval`. A search that hits a GitHub server error or a network blip is retried within seconds; a view that still fails is re-polled on its own after 30s (then 1m, 2m, …) instead of waiting for the next round.
 2. For views with `auto_review = true`, each new PR commit is queued for **one** review. Drafts are skipped, and a review that fails is not retried automatically (press `r` to retry).
    If `review_label` is set, Ghost first adds that label to the PR and reviews it on the next poll; see [Review label](#review-label).
 3. A review runs Claude Code against a temporary checkout of the PR, using your agent's prompt. Ghost then checks the result for anything that looks like a secret.

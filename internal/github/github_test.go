@@ -18,13 +18,21 @@ import (
 type fakeGQL struct {
 	fixture string
 	err     error
+	errs    []error           // returned first, one per call, before err/fixture
 	partial *api.GraphQLError // returned after filling resp, like go-gh does
 	query   string
 	vars    map[string]interface{}
+	calls   int
 }
 
 func (f *fakeGQL) DoWithContext(_ context.Context, query string, vars map[string]interface{}, resp interface{}) error {
 	f.query, f.vars = query, vars
+	f.calls++
+	if len(f.errs) > 0 {
+		err := f.errs[0]
+		f.errs = f.errs[1:]
+		return err
+	}
 	if f.err != nil {
 		return f.err
 	}

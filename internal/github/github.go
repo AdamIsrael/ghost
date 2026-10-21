@@ -65,9 +65,10 @@ type Client struct {
 	gql  GraphQL
 	rest REST
 
-	now     func() time.Time // for the probe cache; nil = time.Now
-	probeMu sync.Mutex
-	probed  map[string]probeResult // query → why it matched nothing
+	retryDelays []time.Duration  // waits between search attempts; nil = defaultRetryDelays
+	now         func() time.Time // for the probe cache; nil = time.Now
+	probeMu     sync.Mutex
+	probed      map[string]probeResult // query → why it matched nothing
 }
 
 func New(gql GraphQL) *Client { return &Client{gql: gql} }
@@ -186,7 +187,10 @@ func (c *Client) SearchPRs(ctx context.Context, query string, limit int) ([]PR, 
 	}
 	var resp searchResponse
 	vars := map[string]interface{}{"q": query, "first": limit}
-	err := c.gql.DoWithContext(ctx, searchQuery, vars, &resp)
+	err := c.retry(ctx, func() error {
+		resp = searchResponse{}
+		return c.gql.DoWithContext(ctx, searchQuery, vars, &resp)
+	})
 	hidden := partial(err)
 	if err != nil && hidden == nil {
 		return nil, 0, fmt.Errorf("search: %w", err)

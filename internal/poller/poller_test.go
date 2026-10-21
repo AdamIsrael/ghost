@@ -3,6 +3,7 @@ package poller
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,8 +17,11 @@ type fakeSearcher struct {
 	queries []string
 	limits  []int
 	fail    map[string]error
+	failN   map[string]int // fail this many times with errTransient, then succeed
 	total   map[string]int // total matches reported per query (default 1)
 }
+
+var errTransient = errors.New("HTTP 502")
 
 func (f *fakeSearcher) SearchPRs(_ context.Context, q string, limit int) ([]github.PR, int, error) {
 	f.mu.Lock()
@@ -26,6 +30,10 @@ func (f *fakeSearcher) SearchPRs(_ context.Context, q string, limit int) ([]gith
 	f.limits = append(f.limits, limit)
 	if err := f.fail[q]; err != nil {
 		return nil, 0, err
+	}
+	if f.failN[q] > 0 {
+		f.failN[q]--
+		return nil, 0, errTransient
 	}
 	total, ok := f.total[q]
 	if !ok {
@@ -203,4 +211,88 @@ func TestNilLimitForUsesDefault(t *testing.T) {
 	if len(f.limits) != 1 || f.limits[0] != config.DefaultMaxPRs {
 		t.Errorf("limits = %v", f.limits)
 	}
+}
+
+// quiet asserts no poll result arrives within d.
+func quiet(t *testing.T, p *Poller, d time.Duration) {
+	t.Helper()
+	select {
+	case r := <-p.Results():
+		t.Fatalf("unexpected poll of %q (err %v)", r.View, r.Err)
+	case <-time.After(d):
+	}
+}
+
+func TestFailedViewIsRetriedSoonAlone(t *testing.T) {
+	f := &fakeSearcher{failN: map[string]int{"qb": 2}}
+	p := New(f, views, time.Hour, nil)
+	p.retryBase = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	if a := next(t, p); a.View != "A" || a.Err != nil {
+		t.Fatalf("A: %+v", a)
+	}
+	if b := next(t, p); b.View != "B" || b.Err == nil {
+		t.Fatalf("B should fail first: %+v", b)
+	}
+	// Only B is re-polled, quickly, until it recovers.
+	if b := next(t, p); b.View != "B" || b.Err == nil {
+		t.Fatalf("second try: %+v", b)
+	}
+	if b := next(t, p); b.View != "B" || b.Err != nil || len(b.PRs) == 0 {
+		t.Fatalf("recovery: %+v", b)
+	}
+	quiet(t, p, 150*time.Millisecond) // healthy views wait for the regular round
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if got := strings.Join(f.queries, ","); got != "qa,qb,qb,qb" {
+		t.Errorf("queries = %s", got)
+	}
+}
+
+func TestRetryDelayDoubles(t *testing.T) {
+	f := &fakeSearcher{failN: map[string]int{"qb": 3}}
+	p := New(f, views, time.Hour, nil)
+	p.retryBase = 40 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	next(t, p)
+	var at []time.Time
+	for i := 0; i < 4; i++ {
+		next(t, p)
+		at = append(at, time.Now())
+	}
+	if gap1, gap2 := at[1].Sub(at[0]), at[2].Sub(at[1]); gap2 < gap1+20*time.Millisecond {
+		t.Errorf("retry gaps %v then %v: want the wait to grow", gap1, gap2)
+	}
+}
+
+func TestAllViewsFailingBacksOffWholeRound(t *testing.T) {
+	f := &fakeSearcher{fail: map[string]error{"qa": errTransient, "qb": errTransient}}
+	p := New(f, views, time.Hour, nil)
+	p.retryBase = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	next(t, p)
+	next(t, p)
+	quiet(t, p, 150*time.Millisecond) // no per-view retries while GitHub looks down
+}
+
+func TestPollNowDuringRetryRunsFullRound(t *testing.T) {
+	f := &fakeSearcher{failN: map[string]int{"qb": 100}}
+	p := New(f, views, time.Hour, nil)
+	p.retryBase = time.Hour // retries wouldn't fire on their own
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	next(t, p)
+	next(t, p)
+	p.PollNow()
+	if a := next(t, p); a.View != "A" {
+		t.Fatalf("PollNow should poll every view, got %q first", a.View)
+	}
+	next(t, p)
 }

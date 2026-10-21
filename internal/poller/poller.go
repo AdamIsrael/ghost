@@ -27,14 +27,19 @@ type Result struct {
 	Truncated bool
 }
 
+// defaultRetryBase is how soon a view that failed while others succeeded is
+// polled again; the wait doubles until it recovers or the full round is due.
+const defaultRetryBase = 30 * time.Second
+
 type Poller struct {
-	searcher Searcher
-	mu       sync.Mutex // guards views
-	views    []config.View
-	interval time.Duration
-	limitFor func(config.View) int
-	results  chan Result
-	trigger  chan struct{}
+	searcher  Searcher
+	mu        sync.Mutex // guards views
+	views     []config.View
+	interval  time.Duration
+	retryBase time.Duration // first quick re-poll of views that failed alone
+	limitFor  func(config.View) int
+	results   chan Result
+	trigger   chan struct{}
 }
 
 // New returns a poller for views. limitFor gives each view's PR limit; nil
@@ -44,12 +49,13 @@ func New(s Searcher, views []config.View, interval time.Duration, limitFor func(
 		limitFor = func(config.View) int { return config.DefaultMaxPRs }
 	}
 	return &Poller{
-		searcher: s,
-		views:    views,
-		interval: interval,
-		limitFor: limitFor,
-		results:  make(chan Result, 16),
-		trigger:  make(chan struct{}, 1),
+		searcher:  s,
+		views:     views,
+		interval:  interval,
+		retryBase: defaultRetryBase,
+		limitFor:  limitFor,
+		results:   make(chan Result, 16),
+		trigger:   make(chan struct{}, 1),
 	}
 }
 
@@ -72,11 +78,15 @@ func (p *Poller) PollNow() {
 }
 
 // Run polls every view once, then again after each interval (backed off while
-// rounds fail) or when PollNow is called, until ctx is cancelled.
+// every view fails) or when PollNow is called, until ctx is cancelled. Views
+// that fail while others succeed are re-polled on their own after retryBase,
+// doubling each time, until they recover or the next full round is due.
 func (p *Poller) Run(ctx context.Context) {
-	failures := 0
+	failures := 0 // consecutive rounds in which every view failed
+round:
 	for {
-		if p.pollAll(ctx) {
+		failed, all := p.poll(ctx, nil)
+		if all {
 			failures++
 		} else {
 			failures = 0
@@ -84,41 +94,77 @@ func (p *Poller) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		timer := time.NewTimer(Backoff(p.interval, failures))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		case <-p.trigger:
-			timer.Stop()
+		due := time.Now().Add(Backoff(p.interval, failures))
+		retryIn := p.retryBase
+		for {
+			wait := time.Until(due)
+			// While GitHub looks down for every view, back off the whole
+			// round instead of retrying views one by one.
+			retrying := len(failed) > 0 && !all && retryIn < wait
+			if retrying {
+				wait = retryIn
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-p.trigger:
+				timer.Stop()
+				continue round
+			case <-timer.C:
+			}
+			if !retrying {
+				continue round
+			}
+			failed, _ = p.poll(ctx, failed)
+			if ctx.Err() != nil {
+				return
+			}
+			retryIn *= 2
 		}
 	}
 }
 
 // pollAll queries each view in order and reports whether any query failed.
 func (p *Poller) pollAll(ctx context.Context) (failed bool) {
+	f, _ := p.poll(ctx, nil)
+	return len(f) > 0
+}
+
+// poll queries the named views (nil = all, in order), sends each result, and
+// returns the names that failed outright and whether every polled view did.
+// A result that still carried PRs (e.g. some hidden by SAML) is a warning,
+// not a failure.
+func (p *Poller) poll(ctx context.Context, only []string) (failed []string, all bool) {
 	p.mu.Lock()
 	views := p.views
 	p.mu.Unlock()
+	want := map[string]bool{}
+	for _, n := range only {
+		want[n] = true
+	}
+	polled := 0
 	for _, v := range views {
+		if only != nil && !want[v.Name] {
+			continue // not retrying this one, or it was renamed/deleted
+		}
+		polled++
 		limit := p.limitFor(v)
 		prs, total, err := p.searcher.SearchPRs(ctx, v.Query, limit)
 		if ctx.Err() != nil {
-			return failed
+			return failed, false
 		}
-		// A result that still carried PRs (e.g. some hidden by SAML) is a
-		// warning, not a failure, so it does not trigger backoff.
 		if err != nil && prs == nil {
-			failed = true
+			failed = append(failed, v.Name)
 		}
 		select {
 		case p.results <- Result{View: v.Name, Query: v.Query, PRs: prs, Err: err, At: time.Now(), Truncated: total > limit}:
 		case <-ctx.Done():
-			return failed
+			return failed, false
 		}
 	}
-	return failed
+	return failed, polled > 0 && len(failed) == polled
 }
 
 // Backoff returns base × 2^failures, capped at 8× base.
