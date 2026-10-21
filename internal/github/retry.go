@@ -23,7 +23,7 @@ func (c *Client) retry(ctx context.Context, do func() error) error {
 	}
 	err := do()
 	for _, d := range delays {
-		if err == nil || !transient(err) || ctx.Err() != nil {
+		if err == nil || !Transient(err) || ctx.Err() != nil {
 			return err
 		}
 		select {
@@ -36,10 +36,10 @@ func (c *Client) retry(ctx context.Context, do func() error) error {
 	return err
 }
 
-// transient reports failures worth retrying: GitHub server errors (5xx) and
+// Transient reports failures worth retrying: GitHub server errors (5xx) and
 // network errors. 4xx responses (bad query, no access, rate limits) and
 // GraphQL errors won't change on a retry.
-func transient(err error) bool {
+func Transient(err error) bool {
 	var h *api.HTTPError
 	if errors.As(err, &h) {
 		return h.StatusCode >= 500

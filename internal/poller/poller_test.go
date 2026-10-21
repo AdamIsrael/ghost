@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cli/go-gh/v2/pkg/api"
+
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/github"
 )
@@ -21,7 +23,7 @@ type fakeSearcher struct {
 	total   map[string]int // total matches reported per query (default 1)
 }
 
-var errTransient = errors.New("HTTP 502")
+var errTransient = &api.HTTPError{StatusCode: 502, Message: "Bad Gateway"}
 
 func (f *fakeSearcher) SearchPRs(_ context.Context, q string, limit int) ([]github.PR, int, error) {
 	f.mu.Lock()
@@ -159,7 +161,7 @@ func TestPartialResultIsNotAFailedRound(t *testing.T) {
 		for range p.Results() {
 		}
 	}()
-	if p.pollAll(context.Background()) {
+	if retry, all := p.poll(context.Background(), nil); len(retry) > 0 || all {
 		t.Error("a round that returned PRs should not count as failed (would trigger backoff)")
 	}
 }
@@ -188,7 +190,7 @@ func TestPollUsesEachViewsLimitAndMarksTruncated(t *testing.T) {
 	f := &fakeSearcher{total: map[string]int{"qa": 31, "qb": 80}}
 	vs := []config.View{{Name: "A", Query: "qa"}, {Name: "B", Query: "qb", MaxPRs: 80}}
 	p := New(f, vs, time.Hour, (&config.Config{MaxPRsPerView: 30}).PRLimitFor)
-	go p.pollAll(context.Background())
+	go p.poll(context.Background(), nil)
 	a, b := next(t, p), next(t, p)
 	f.mu.Lock()
 	limits := append([]int(nil), f.limits...)
@@ -204,7 +206,7 @@ func TestPollUsesEachViewsLimitAndMarksTruncated(t *testing.T) {
 func TestNilLimitForUsesDefault(t *testing.T) {
 	f := &fakeSearcher{}
 	p := New(f, views[:1], time.Hour, nil)
-	go p.pollAll(context.Background())
+	go p.poll(context.Background(), nil)
 	next(t, p)
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -254,7 +256,7 @@ func TestFailedViewIsRetriedSoonAlone(t *testing.T) {
 func TestRetryDelayDoubles(t *testing.T) {
 	f := &fakeSearcher{failN: map[string]int{"qb": 3}}
 	p := New(f, views, time.Hour, nil)
-	p.retryBase = 40 * time.Millisecond
+	p.retryBase = 100 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go p.Run(ctx)
@@ -264,7 +266,7 @@ func TestRetryDelayDoubles(t *testing.T) {
 		next(t, p)
 		at = append(at, time.Now())
 	}
-	if gap1, gap2 := at[1].Sub(at[0]), at[2].Sub(at[1]); gap2 < gap1+20*time.Millisecond {
+	if gap1, gap2 := at[1].Sub(at[0]), at[2].Sub(at[1]); gap2 <= gap1*3/2 {
 		t.Errorf("retry gaps %v then %v: want the wait to grow", gap1, gap2)
 	}
 }
@@ -284,7 +286,7 @@ func TestAllViewsFailingBacksOffWholeRound(t *testing.T) {
 func TestPollNowDuringRetryRunsFullRound(t *testing.T) {
 	f := &fakeSearcher{failN: map[string]int{"qb": 100}}
 	p := New(f, views, time.Hour, nil)
-	p.retryBase = time.Hour // retries wouldn't fire on their own
+	p.retryBase = 10 * time.Minute // in a retry wait that won't end on its own
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go p.Run(ctx)
@@ -295,4 +297,35 @@ func TestPollNowDuringRetryRunsFullRound(t *testing.T) {
 		t.Fatalf("PollNow should poll every view, got %q first", a.View)
 	}
 	next(t, p)
+}
+
+func TestPermanentFailureIsNotRetriedEarly(t *testing.T) {
+	bad := &api.HTTPError{StatusCode: 422, Message: "Validation Failed"}
+	f := &fakeSearcher{fail: map[string]error{"qb": bad}}
+	p := New(f, views, time.Hour, nil)
+	p.retryBase = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	next(t, p)
+	if b := next(t, p); b.Err == nil {
+		t.Fatalf("B should fail: %+v", b)
+	}
+	quiet(t, p, 150*time.Millisecond) // a bad query won't fix itself in 30s
+}
+
+func TestDeletedViewIsNotRetried(t *testing.T) {
+	f := &fakeSearcher{failN: map[string]int{"qb": 100}}
+	p := New(f, views, time.Hour, nil)
+	p.retryBase = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	next(t, p)
+	next(t, p)
+	p.SetViews(views[:1]) // B deleted while it waits for a retry
+	if a := next(t, p); a.View != "A" {
+		t.Fatalf("SetViews should poll the remaining views, got %q", a.View)
+	}
+	quiet(t, p, 250*time.Millisecond)
 }

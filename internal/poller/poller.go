@@ -79,13 +79,14 @@ func (p *Poller) PollNow() {
 
 // Run polls every view once, then again after each interval (backed off while
 // every view fails) or when PollNow is called, until ctx is cancelled. Views
-// that fail while others succeed are re-polled on their own after retryBase,
-// doubling each time, until they recover or the next full round is due.
+// that fail transiently (GitHub 5xx, network) while others succeed are
+// re-polled on their own after retryBase, doubling each time, until they
+// recover or the next full round is due.
 func (p *Poller) Run(ctx context.Context) {
 	failures := 0 // consecutive rounds in which every view failed
 round:
 	for {
-		failed, all := p.poll(ctx, nil)
+		retry, all := p.poll(ctx, nil)
 		if all {
 			failures++
 		} else {
@@ -100,7 +101,7 @@ round:
 			wait := time.Until(due)
 			// While GitHub looks down for every view, back off the whole
 			// round instead of retrying views one by one.
-			retrying := len(failed) > 0 && !all && retryIn < wait
+			retrying := len(retry) > 0 && !all && retryIn < wait
 			if retrying {
 				wait = retryIn
 			}
@@ -117,7 +118,7 @@ round:
 			if !retrying {
 				continue round
 			}
-			failed, _ = p.poll(ctx, failed)
+			retry, _ = p.poll(ctx, retry)
 			if ctx.Err() != nil {
 				return
 			}
@@ -126,17 +127,11 @@ round:
 	}
 }
 
-// pollAll queries each view in order and reports whether any query failed.
-func (p *Poller) pollAll(ctx context.Context) (failed bool) {
-	f, _ := p.poll(ctx, nil)
-	return len(f) > 0
-}
-
-// poll queries the named views (nil = all, in order), sends each result, and
-// returns the names that failed outright and whether every polled view did.
-// A result that still carried PRs (e.g. some hidden by SAML) is a warning,
-// not a failure.
-func (p *Poller) poll(ctx context.Context, only []string) (failed []string, all bool) {
+// poll queries the named views (nil = all, in order) and sends each result.
+// It returns the views worth retrying soon (failed transiently) and whether
+// every polled view failed outright. A result that still carried PRs (e.g.
+// some hidden by SAML) is a warning, not a failure.
+func (p *Poller) poll(ctx context.Context, only []string) (retry []string, all bool) {
 	p.mu.Lock()
 	views := p.views
 	p.mu.Unlock()
@@ -144,7 +139,7 @@ func (p *Poller) poll(ctx context.Context, only []string) (failed []string, all 
 	for _, n := range only {
 		want[n] = true
 	}
-	polled := 0
+	polled, failed := 0, 0
 	for _, v := range views {
 		if only != nil && !want[v.Name] {
 			continue // not retrying this one, or it was renamed/deleted
@@ -153,18 +148,21 @@ func (p *Poller) poll(ctx context.Context, only []string) (failed []string, all 
 		limit := p.limitFor(v)
 		prs, total, err := p.searcher.SearchPRs(ctx, v.Query, limit)
 		if ctx.Err() != nil {
-			return failed, false
+			return retry, false
 		}
 		if err != nil && prs == nil {
-			failed = append(failed, v.Name)
+			failed++
+			if github.Transient(err) {
+				retry = append(retry, v.Name)
+			}
 		}
 		select {
 		case p.results <- Result{View: v.Name, Query: v.Query, PRs: prs, Err: err, At: time.Now(), Truncated: total > limit}:
 		case <-ctx.Done():
-			return failed, false
+			return retry, false
 		}
 	}
-	return failed, polled > 0 && len(failed) == polled
+	return retry, polled > 0 && failed == polled
 }
 
 // Backoff returns base × 2^failures, capped at 8× base.
