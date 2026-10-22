@@ -36,6 +36,17 @@ func (h *harness) settle(t *testing.T) {
 	})
 }
 
+// pollUntil re-sends a poll of prs until cond holds. A check batch still
+// finishing from an earlier poll makes the engine skip this poll's check (by
+// design: the next poll redoes it), so a single poll can be lost.
+func (h *harness) pollUntil(t *testing.T, what string, cond func() bool, prs ...github.PR) {
+	t.Helper()
+	waitFor(t, what, func() bool {
+		h.poll("Team", prs...)
+		return cond()
+	})
+}
+
 // waitCheckBatch waits until GetPR for PR n has been called at least once
 // (so a check batch holds checkMu) and that batch has finished.
 func (h *harness) waitCheckBatch(t *testing.T, n int) {
@@ -112,8 +123,7 @@ func TestReaddedLabelResumes(t *testing.T) {
 	h.poll("Team", ghPR(1, "sha1"))
 	h.waitAudit(t, 1, "opted out")
 	h.setLabels(1, "ai-review")
-	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
-	h.waitAudit(t, 1, "label re-added")
+	h.pollUntil(t, "label re-added", func() bool { return h.auditCount(1, "label re-added") > 0 }, labeledPR(1, "sha1", "ai-review"))
 	waitFor(t, "queued", func() bool { return h.state(1) != "" })
 }
 
@@ -139,8 +149,7 @@ func TestHumanLabelRemovedIsOptOut(t *testing.T) {
 	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
 	waitFor(t, "queued", func() bool { return h.state(1) != "" })
 	h.setLabels(1) // and removed it
-	h.poll("Team", ghPR(1, "sha2"))
-	h.waitAudit(t, 1, "opted out")
+	h.pollUntil(t, "opted out", func() bool { return h.auditCount(1, "opted out") > 0 }, ghPR(1, "sha2"))
 	if h.labelCallCount() != 0 {
 		t.Error("Ghost re-added a label a person removed")
 	}
@@ -321,8 +330,7 @@ func TestStaleReaddIsNotTrusted(t *testing.T) {
 	h.waitAudit(t, 1, "opted out")
 	calls := h.getPRCallCount(1)
 	// Search claims the label is back; GitHub says it isn't.
-	h.poll("Team", labeledPR(1, "sha1", "ai-review"))
-	waitFor(t, "check ran", func() bool { return h.getPRCallCount(1) > calls })
+	h.pollUntil(t, "check ran", func() bool { return h.getPRCallCount(1) > calls }, labeledPR(1, "sha1", "ai-review"))
 	h.waitCheckBatch(t, 1)
 	if st, _ := h.st.LabelState(prIDOf(t, h, 1), "ai-review"); st != store.LabelOptedOut || h.auditCount(1, "label re-added") != 0 || h.state(1) != "" {
 		t.Fatalf("stale re-add trusted: state %v, re-added %d, review %q", st, h.auditCount(1, "label re-added"), h.state(1))

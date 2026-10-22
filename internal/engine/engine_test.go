@@ -165,11 +165,22 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	return h
 }
 
+// start runs the engine until the test ends. Cleanup waits for Run to
+// return, so nothing writes to the store while it closes and its temp
+// directory is removed (cleanups run last-in, first-out).
 func (h *harness) start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
-	h.t.Cleanup(cancel)
-	go h.e.Run(ctx)
+	done := make(chan struct{})
+	h.t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			h.t.Error("engine did not stop within 5s of the test ending")
+		}
+	})
+	go func() { h.e.Run(ctx); close(done) }()
 }
 
 func (h *harness) poll(view string, prs ...github.PR) {
