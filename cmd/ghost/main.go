@@ -18,6 +18,7 @@ import (
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/engine"
 	"github.com/AdamIsrael/ghost/internal/github"
+	"github.com/AdamIsrael/ghost/internal/logging"
 	"github.com/AdamIsrael/ghost/internal/paths"
 	"github.com/AdamIsrael/ghost/internal/poller"
 	"github.com/AdamIsrael/ghost/internal/preflight"
@@ -192,6 +193,17 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 	}
 	defer st.Close()
 
+	logPath := cfg.LogPath()
+	logger, logFile, err := logging.Open(logPath)
+	if err != nil {
+		// A log is for debugging; don't refuse to start without one.
+		fmt.Fprintf(stderr, "ghost: can't write the log %s: %v; continuing without it\n", logPath, err)
+		logger, logFile, _ = logging.Open("")
+	}
+	defer logFile.Close()
+	logger.Info("started", "version", versionString(), "config", *cfgPath, "db", *dbPath, "log", logPath)
+	defer logger.Info("stopped")
+
 	opts := tui.Options{
 		Views:           cfg.Views,
 		MaxDailyCostUSD: cfg.MaxDailyCostUSD,
@@ -202,13 +214,14 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		ConfigPath:      *cfgPath,
 		Themes:          themes,
 		ReviewLabel:     cfg.ReviewLabel,
+		Log:             logger,
 		MaxPRsPerView:   cfg.MaxPRsPerView,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	eng := engine.New(cfg, engine.Deps{
 		Store: st, GetPR: d.getPR, Checkout: d.checkout, NewReviewer: d.newReviewer,
-		PostReview: d.postReview, HasReview: d.hasReview, Approve: d.approve,
+		PostReview: d.postReview, HasReview: d.hasReview, Approve: d.approve, Log: logger,
 		AddLabel: d.addLabel,
 	})
 	engineDone := make(chan struct{})
@@ -300,6 +313,11 @@ func runCheck(cfgPath string, stdout io.Writer, runner preflight.Runner) int {
 		fmt.Fprintf(stdout, "✗ %-7s %v\n", "config", err)
 	} else {
 		fmt.Fprintf(stdout, "✓ %-7s %s\n", "config", cfgPath)
+		if p := cfg.LogPath(); p == "" {
+			fmt.Fprintf(stdout, "✓ %-7s %s\n", "log", "off (log_file = \"\")")
+		} else {
+			fmt.Fprintf(stdout, "✓ %-7s %s\n", "log", p)
+		}
 		if cfg.ReviewLabel == "" {
 			fmt.Fprintf(stdout, "✓ %-7s %s\n", "label", "off (PRs are reviewed without a label)")
 		} else {

@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -67,6 +69,7 @@ type harness struct {
 	addLabelErr   error
 	addLabelBlock chan struct{} // if set, AddLabel waits for it to close
 	getPRBlock    chan struct{} // if set, GetPR waits for it to close
+	log           *lockedBuffer // what the engine logged
 }
 
 func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
@@ -83,12 +86,13 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	h := &harness{t: t, st: st, heads: map[int]string{}, ci: map[int]string{}, labels: map[int][]string{}, getPRCalls: map[int]int{}, rev: &fakeReviewer{res: agent.ReviewResult{
+	h := &harness{t: t, st: st, log: &lockedBuffer{}, heads: map[int]string{}, ci: map[int]string{}, labels: map[int][]string{}, getPRCalls: map[int]int{}, rev: &fakeReviewer{res: agent.ReviewResult{
 		Verdict: agent.RequestChanges, Summary: "Needs a nil check.", CostUSD: 0.4,
 		Comments: []agent.InlineComment{{Path: "a.go", Line: 3, Body: "nil deref", Severity: "blocking"}},
 	}}}
 	h.e = New(cfg, Deps{
 		Store: st,
+		Log:   slog.New(slog.NewTextHandler(h.log, nil)),
 		GetPR: func(_ context.Context, repo string, n int) (github.PRDetail, error) {
 			h.mu.Lock()
 			h.getPRCalls[n]++
@@ -523,4 +527,48 @@ func (h *harness) auditCount(n int, kind string) int {
 		}
 	}
 	return c
+}
+
+// lockedBuffer is a bytes.Buffer safe to write from the engine while a test
+// reads it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func TestAuditEventsAreLogged(t *testing.T) {
+	h := newHarness(t, nil)
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	waitFor(t, "ready", func() bool { return h.state(1) == store.Ready })
+	out := h.log.String()
+	for _, want := range []string{"level=INFO msg=queued pr=o/r#1 review=1", "msg=started pr=o/r#1", "msg=\"ready to post\" pr=o/r#1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestFailedReviewIsLoggedAsError(t *testing.T) {
+	h := newHarness(t, nil)
+	h.rev.err = errors.New("claude: exit status 1: something long and important that the TUI would cut off")
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	waitFor(t, "failed", func() bool { return h.state(1) == store.Failed })
+	waitFor(t, "logged", func() bool { return strings.Contains(h.log.String(), "level=ERROR msg=failed pr=o/r#1") })
+	if !strings.Contains(h.log.String(), "something long and important that the TUI would cut off") {
+		t.Errorf("full error text missing:\n%s", h.log.String())
+	}
 }

@@ -28,20 +28,22 @@ func (d *Duration) UnmarshalText(b []byte) error {
 func (d Duration) MarshalText() ([]byte, error) { return []byte(d.String()), nil }
 
 type Config struct {
-	PollInterval         Duration         `toml:"poll_interval"`
-	MaxConcurrentReviews int              `toml:"max_concurrent_reviews"`
-	MaxDailyCostUSD      float64          `toml:"max_daily_cost_usd"`
-	MaxCostPerReviewUSD  float64          `toml:"max_cost_per_review_usd"`
-	PostMode             string           `toml:"post_mode"`
-	Theme                string           `toml:"theme"`
-	ReviewFooter         string           `toml:"review_footer"`
-	ApprovalMessage      string           `toml:"approval_message"`
-	ReviewLabel          string           `toml:"review_label"`
-	MaxPRsPerView        int              `toml:"max_prs_per_view"`
-	DefaultAgent         string           `toml:"default_agent"`
-	Agents               map[string]Agent `toml:"agents"`
-	AutoApprove          AutoApprove      `toml:"auto_approve"`
-	Views                []View           `toml:"view"`
+	PollInterval         Duration `toml:"poll_interval"`
+	MaxConcurrentReviews int      `toml:"max_concurrent_reviews"`
+	MaxDailyCostUSD      float64  `toml:"max_daily_cost_usd"`
+	MaxCostPerReviewUSD  float64  `toml:"max_cost_per_review_usd"`
+	PostMode             string   `toml:"post_mode"`
+	Theme                string   `toml:"theme"`
+	ReviewFooter         string   `toml:"review_footer"`
+	ApprovalMessage      string   `toml:"approval_message"`
+	ReviewLabel          string   `toml:"review_label"`
+	MaxPRsPerView        int      `toml:"max_prs_per_view"`
+	// LogFile moves the log: nil = paths.LogFile(), "" = no log.
+	LogFile      *string          `toml:"log_file"`
+	DefaultAgent string           `toml:"default_agent"`
+	Agents       map[string]Agent `toml:"agents"`
+	AutoApprove  AutoApprove      `toml:"auto_approve"`
+	Views        []View           `toml:"view"`
 
 	// baseDir is the directory of the loaded config file; relative
 	// prompt_file paths resolve against it.

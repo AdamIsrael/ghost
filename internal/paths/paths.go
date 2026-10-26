@@ -23,6 +23,9 @@ func ConfigFile() string { return xdg("XDG_CONFIG_HOME", ".config", "config.toml
 
 func DataFile() string { return xdg("XDG_DATA_HOME", ".local/share", "ghost.db") }
 
+// LogFile is the default log location, under XDG_STATE_HOME.
+func LogFile() string { return xdg("XDG_STATE_HOME", ".local/state", "ghost.log") }
+
 func xdg(env, fallback, file string) string {
 	if base := os.Getenv(env); base != "" {
 		return filepath.Join(base, "ghost", file)

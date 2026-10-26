@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ type Options struct {
 	Agents          []string                  // agent names for the view form
 	ReviewLabel     string                    // review_label: the view form's default
 	MaxPRsPerView   int                       // max_prs_per_view: the view form's default
+	Log             *slog.Logger              // receives errors in full; nil = discard
 }
 
 // Engine is what the TUI needs from the review engine.
@@ -100,6 +102,9 @@ func waitForChange(e Engine) tea.Cmd {
 }
 
 func New(o Options) Model {
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
 	m := Model{opts: o, prs: map[string][]github.PR{}, more: map[string]bool{}, errs: map[string]error{},
 		views: append([]config.View(nil), o.Views...)}
 	m.themes = o.Themes
@@ -225,6 +230,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil || msg.PRs != nil {
 			m.lastPoll = msg.At // a failed poll doesn't count as polled
 		}
+		m.logPoll(msg)
 		if msg.Err != nil {
 			m.errs[msg.View] = msg.Err
 		} else {
@@ -248,6 +254,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case engineDoneMsg:
 		m.flash = ""
 		if msg.err != nil {
+			m.opts.Log.Error(msg.what+" failed", "err", msg.err)
 			m.flash = msg.err.Error()
 			if !strings.HasPrefix(m.flash, msg.what+":") {
 				m.flash = msg.what + ": " + m.flash
@@ -256,6 +263,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openedMsg:
 		m.flash = ""
 		if msg.err != nil {
+			m.opts.Log.Error("open failed", "err", msg.err)
 			m.flash = "open failed: " + msg.err.Error()
 		}
 	case tea.BackgroundColorMsg:
@@ -399,6 +407,22 @@ func (m Model) View() tea.View {
 	return v
 }
 
+// logPoll records a view's poll problem in full when it first appears or
+// changes, and its recovery, so a view failing every poll logs once.
+func (m Model) logPoll(r resultMsg) {
+	prev := m.errs[r.View]
+	switch {
+	case r.Err != nil && (prev == nil || prev.Error() != r.Err.Error()):
+		if r.PRs != nil {
+			m.opts.Log.Warn("poll warning", "view", r.View, "query", r.Query, "err", r.Err)
+		} else {
+			m.opts.Log.Error("poll failed", "view", r.View, "query", r.Query, "err", r.Err)
+		}
+	case r.Err == nil && prev != nil:
+		m.opts.Log.Info("poll recovered", "view", r.View)
+	}
+}
+
 func (m Model) emptyMessage() string {
 	v, ok := m.currentView()
 	switch {
@@ -514,6 +538,7 @@ func (m Model) handleFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			idx = len(views) - 1
 		}
 		if err := m.opts.SaveViews(views); err != nil {
+			m.opts.Log.Error("save view failed", "view", v.Name, "err", err)
 			f.err = err.Error()
 			m.form = &f
 			return m, nil
@@ -544,6 +569,7 @@ func (m Model) handleConfirmKey(k string) (tea.Model, tea.Cmd) {
 		}
 	}
 	if err := m.opts.SaveViews(views); err != nil {
+		m.opts.Log.Error("delete view failed", "view", name, "err", err)
 		m.flash = "delete: " + err.Error()
 		return m, nil
 	}

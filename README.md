@@ -111,6 +111,7 @@ Ghost reads `~/.config/ghost/config.toml` (or `$XDG_CONFIG_HOME/ghost/config.tom
 | `approval_message` | `""` (off) | Text of each approval |
 | `review_label` | `""` (off) | Label Ghost adds before reviewing; removing it opts a PR out |
 | `max_prs_per_view` | `50` | How many PRs each view shows (1–100) |
+| `log_file` | `~/.local/state/ghost/ghost.log` | Where Ghost logs; `""` turns logging off. See [Logs](#logs) |
 
 ### Footer and approval message
 
@@ -256,6 +257,21 @@ info = "#7dcfff"         # authors
 
 A file named after a built-in replaces it. `ghost --check` warns if your selected theme is hard to read.
 
+## Logs
+
+The TUI has to cut long messages to fit. Ghost also writes every error in full, plus what it did (queued, posted, approved, labeled…), to `~/.local/state/ghost/ghost.log` (or `$XDG_STATE_HOME/ghost/ghost.log`):
+
+```
+time=2026-10-26T15:41:02Z level=ERROR msg="poll failed" view=Team query="is:open is:pr org:acme" err="search: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)"
+time=2026-10-26T15:43:10Z level=INFO msg=posted pr=acme/api#42 review=17 detail="REQUEST_CHANGES, 3 comments"
+```
+
+- Follow it while Ghost runs: `tail -f ~/.local/state/ghost/ghost.log`. Find problems: `grep -E 'level=(ERROR|WARN)' ~/.local/state/ghost/ghost.log`.
+- A view that keeps failing logs its error once, again only if the message changes, and `poll recovered` when it works again.
+- The file is capped at 5 MB; the previous one is kept as `ghost.log.1`.
+- Set `log_file` in `config.toml` to write it elsewhere, or `log_file = ""` to turn it off. `ghost --check` shows where it goes.
+- Control characters in messages are escaped, so tailing the log can't be used to mess with your terminal.
+
 ## Command line
 
 ```
@@ -279,8 +295,9 @@ ghost [--config PATH] review <pr> --show-prompt    print the prompt; runs nothin
 | `~/.config/ghost/themes/` | Your themes |
 | `~/.local/share/ghost/ghost.db` | Reviews, audit trail and spend (SQLite) |
 | `~/.cache/ghost/` | Blobless clones of reviewed repos, and per-review checkouts (removed after each review) |
+| `~/.local/state/ghost/ghost.log` | Log of errors and actions (and `ghost.log.1`, the previous 5 MB) |
 
-These follow `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` when set.
+These follow `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME` when set.
 
 ## Development
 

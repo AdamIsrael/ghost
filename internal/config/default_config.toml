@@ -33,6 +33,12 @@ theme = "auto"
 # search). A view can override it with `max_prs = ...` in views.toml.
 # max_prs_per_view = 50
 
+# Ghost logs errors in full, plus its actions (queued, posted, approved…), to
+# ~/.local/state/ghost/ghost.log (or $XDG_STATE_HOME/ghost/ghost.log). The
+# file is capped at 5 MB with one older copy (ghost.log.1).
+# log_file = "~/logs/ghost.log"   # write it somewhere else
+# log_file = ""                   # turn logging off
+
 default_agent = "claude"
 
 [agents.claude]

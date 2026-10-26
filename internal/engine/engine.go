@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ type Deps struct {
 	Approve     func(ctx context.Context, repo string, number int, commitID, body string) error
 	AddLabel    func(ctx context.Context, repo string, number int, label string) error
 	Now         func() time.Time
+	Log         *slog.Logger // receives every audit event; nil = discard
 }
 
 type Snapshot struct {
@@ -76,6 +78,9 @@ type Engine struct {
 func New(cfg config.Config, d Deps) *Engine {
 	if d.Now == nil {
 		d.Now = time.Now
+	}
+	if d.Log == nil {
+		d.Log = slog.New(slog.DiscardHandler)
 	}
 	return &Engine{
 		cfg:       cfg,
@@ -397,7 +402,37 @@ func (e *Engine) save(r *store.Review) { _ = e.d.Store.SaveReview(r) }
 
 func (e *Engine) audit(prID, reviewID int64, kind, msg string) {
 	_ = e.d.Store.AddAudit(prID, reviewID, kind, msg)
+	e.logAudit(prID, reviewID, kind, msg)
 	e.notify()
+}
+
+// logAudit mirrors an audit event to the log file in full, with the PR it's
+// about: the TUI's audit trail cuts long messages to the pane width.
+func (e *Engine) logAudit(prID, reviewID int64, kind, msg string) {
+	ref, err := e.d.Store.PRRef(prID)
+	if err != nil {
+		ref = fmt.Sprintf("pr-id-%d", prID)
+	}
+	attrs := []any{"pr", ref}
+	if reviewID != 0 {
+		attrs = append(attrs, "review", reviewID)
+	}
+	if msg != "" {
+		attrs = append(attrs, "detail", msg)
+	}
+	e.d.Log.Log(context.Background(), auditLevel(kind), kind, attrs...)
+}
+
+// auditLevel grades audit kinds for the log: failures are errors, outcomes
+// that may need a look are warnings, everything else is information.
+func auditLevel(kind string) slog.Level {
+	switch {
+	case strings.Contains(kind, "failed"), kind == "blocked":
+		return slog.LevelError
+	case kind == "interrupted", kind == "post unknown", kind == "not approved", kind == "opted out":
+		return slog.LevelWarn
+	}
+	return slog.LevelInfo
 }
 
 // TogglePause stops or resumes starting new reviews and returns the new state.

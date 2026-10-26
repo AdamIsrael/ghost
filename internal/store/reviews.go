@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -77,6 +78,16 @@ func (s *Store) UpsertPR(pr github.PR) (int64, error) {
 		RETURNING id`,
 		pr.Repo, pr.Number, pr.Title, pr.Author, pr.URL, pr.HeadSHA, pr.Status().String(), ts(s.now())).Scan(&id)
 	return id, err
+}
+
+// PRRef returns "owner/repo#number" for a stored PR.
+func (s *Store) PRRef(prID int64) (string, error) {
+	var repo string
+	var number int
+	if err := s.db.QueryRow(`SELECT repo, number FROM prs WHERE id = ?`, prID).Scan(&repo, &number); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s#%d", repo, number), nil
 }
 
 // Reviewed reports whether any review (in any state) exists for the PR at

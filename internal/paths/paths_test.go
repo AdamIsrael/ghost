@@ -55,3 +55,16 @@ func TestCacheDir(t *testing.T) {
 		t.Errorf("CacheDir with XDG = %q", got)
 	}
 }
+
+func TestLogFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", "")
+	if got, want := LogFile(), filepath.Join(home, ".local/state/ghost/ghost.log"); got != want {
+		t.Errorf("LogFile = %q, want %q", got, want)
+	}
+	t.Setenv("XDG_STATE_HOME", "/xs")
+	if got := LogFile(); got != "/xs/ghost/ghost.log" {
+		t.Errorf("LogFile with XDG = %q", got)
+	}
+}

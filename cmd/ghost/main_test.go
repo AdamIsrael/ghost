@@ -62,6 +62,19 @@ func testDeps(runner preflight.Runner, s *fakeSearcher) (deps, *bool) {
 	}, ran
 }
 
+// TestMain keeps these tests away from the real log: ghost logs to
+// $XDG_STATE_HOME/ghost/ghost.log by default.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "ghost-state-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("XDG_STATE_HOME", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 func depsFor(runner preflight.Runner) deps { d, _ := testDeps(runner, nil); return d }
 
 func TestInitThenStart(t *testing.T) {
@@ -87,6 +100,40 @@ func TestInitThenStart(t *testing.T) {
 	if _, err := os.Stat(db); err != nil {
 		t.Errorf("database not created: %v", err)
 	}
+	logged, err := os.ReadFile(filepath.Join(os.Getenv("XDG_STATE_HOME"), "ghost", "ghost.log"))
+	if err != nil || !strings.Contains(string(logged), "msg=started") || !strings.Contains(string(logged), "config="+cfg) {
+		t.Errorf("startup not logged (err %v):\n%s", err, logged)
+	}
+}
+
+func TestLogFileOff(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	os.WriteFile(cfg, []byte("log_file = \"\"\n[agents.a]\nkind = \"claude\"\nprompt = \"x\"\n"), 0o644)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	var out, errb bytes.Buffer
+	if code := run([]string{"--config", cfg, "--db", filepath.Join(dir, "g.db")}, &out, &errb, depsFor(okRunner)); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state")); !os.IsNotExist(err) {
+		t.Errorf("log_file = \"\" still wrote a log (stat err %v)", err)
+	}
+}
+
+func TestUnwritableLogDoesNotStopGhost(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	blocker := filepath.Join(dir, "not-a-dir")
+	os.WriteFile(blocker, []byte("x"), 0o644)
+	os.WriteFile(cfg, []byte("log_file = \""+filepath.Join(blocker, "ghost.log")+"\"\n[agents.a]\nkind = \"claude\"\nprompt = \"x\"\n"), 0o644)
+	var out, errb bytes.Buffer
+	d, ran := testDeps(okRunner, nil)
+	if code := run([]string{"--config", cfg, "--db", filepath.Join(dir, "g.db")}, &out, &errb, d); code != 0 || !*ran {
+		t.Fatalf("exit %d ran %v: %s", code, *ran, errb.String())
+	}
+	if !strings.Contains(errb.String(), "log") {
+		t.Errorf("should warn that the log can't be written: %q", errb.String())
+	}
 }
 
 func TestStartWithoutConfig(t *testing.T) {
@@ -110,6 +157,9 @@ func TestCheck(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "label") || !strings.Contains(out.String(), "off") {
 		t.Errorf("check should report the review label as off: %q", out.String())
+	}
+	if !strings.Contains(out.String(), filepath.Join(os.Getenv("XDG_STATE_HOME"), "ghost", "ghost.log")) {
+		t.Errorf("check should print the log path: %q", out.String())
 	}
 
 	failGh := func(ctx context.Context, name string, args ...string) (string, error) {

@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -134,5 +136,64 @@ func TestBlockedViewIsAWarningInStatusBar(t *testing.T) {
 		resultMsg(poller.Result{View: twoViews[1].Name, Err: errors.New("HTTP 502"), At: time.Now()}))
 	if out := screen(m); !strings.Contains(out, twoViews[1].Name+": HTTP 502") {
 		t.Errorf("a real failure in another view must outrank a blocked view:\n%s", out)
+	}
+}
+
+func logModel(t *testing.T) (tea.Model, *bytes.Buffer) {
+	t.Helper()
+	var buf bytes.Buffer
+	m := send(t, New(Options{Views: twoViews, Log: slog.New(slog.NewTextHandler(&buf, nil))}), tea.WindowSizeMsg{Width: 160, Height: 10})
+	return m, &buf
+}
+
+func TestPollErrorsAreLoggedOnChange(t *testing.T) {
+	m, buf := logModel(t)
+	team := twoViews[0].Name
+	e502 := errors.New("search: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql) and a lot more text the status bar cuts off")
+	m = send(t, m,
+		resultMsg(poller.Result{View: team, Err: e502, At: time.Now()}),
+		resultMsg(poller.Result{View: team, Err: e502, At: time.Now()}), // same again: not re-logged
+		resultMsg(poller.Result{View: team, Err: errors.New("search: HTTP 503"), At: time.Now()}),
+		resultMsg(poller.Result{View: team, PRs: []github.PR{samplePR(1, "x")}, At: time.Now()}),
+		resultMsg(poller.Result{View: team, PRs: []github.PR{samplePR(1, "x")}, At: time.Now()}), // healthy: nothing
+	)
+	out := buf.String()
+	if n := strings.Count(out, "HTTP 502"); n != 1 {
+		t.Errorf("the same error was logged %d times, want 1:\n%s", n, out)
+	}
+	for _, want := range []string{
+		`level=ERROR msg="poll failed" view=` + team,
+		"a lot more text the status bar cuts off",
+		"HTTP 503",
+		`level=INFO msg="poll recovered" view=` + team,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log missing %q:\n%s", want, out)
+		}
+	}
+	if n := strings.Count(out, "poll recovered"); n != 1 {
+		t.Errorf("recovered logged %d times, want 1", n)
+	}
+	_ = m
+}
+
+func TestPollWarningIsLoggedAsWarn(t *testing.T) {
+	m, buf := logModel(t)
+	send(t, m, resultMsg(poller.Result{View: twoViews[0].Name, PRs: []github.PR{}, Err: &github.SearchBlockedError{Reason: "blocked by SAML"}, At: time.Now()}))
+	if out := buf.String(); !strings.Contains(out, `level=WARN msg="poll warning"`) || !strings.Contains(out, "blocked by SAML") {
+		t.Errorf("log:\n%s", out)
+	}
+}
+
+func TestActionErrorsAreLogged(t *testing.T) {
+	m, buf := logModel(t)
+	send(t, m,
+		engineDoneMsg{what: "post", err: errors.New("post o/r#42: HTTP 422: a long validation message")},
+		openedMsg{err: errors.New("exec: open: not found")})
+	out := buf.String()
+	for _, want := range []string{`level=ERROR msg="post failed"`, "a long validation message", `level=ERROR msg="open failed"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log missing %q:\n%s", want, out)
+		}
 	}
 }

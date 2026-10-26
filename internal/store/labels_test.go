@@ -111,3 +111,13 @@ func TestReviewed(t *testing.T) {
 		t.Error("EnqueueReview must still refuse a reviewed commit")
 	}
 }
+
+func TestPRRef(t *testing.T) {
+	s, pr := labelStore(t)
+	if ref, err := s.PRRef(pr); err != nil || ref != "o/r#1" {
+		t.Errorf("PRRef = %q, %v", ref, err)
+	}
+	if _, err := s.PRRef(9999); err == nil {
+		t.Error("unknown PR should be an error")
+	}
+}
