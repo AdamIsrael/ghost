@@ -188,12 +188,20 @@ func TestPollWarningIsLoggedAsWarn(t *testing.T) {
 func TestActionErrorsAreLogged(t *testing.T) {
 	m, buf := logModel(t)
 	send(t, m,
-		engineDoneMsg{what: "post", err: errors.New("post o/r#42: HTTP 422: a long validation message")},
+		engineDoneMsg{what: "post", pr: "o/r#42", err: errors.New("HTTP 422: a long validation message")},
 		openedMsg{err: errors.New("exec: open: not found")})
 	out := buf.String()
-	for _, want := range []string{`level=ERROR msg="post failed"`, "a long validation message", `level=ERROR msg="open failed"`} {
+	for _, want := range []string{`level=ERROR msg="post failed" pr=o/r#42`, "a long validation message", `level=ERROR msg="open failed"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestDeletedViewResultIsNotLogged(t *testing.T) {
+	m, buf := logModel(t)
+	send(t, m, resultMsg(poller.Result{View: "Gone", Err: errors.New("HTTP 502"), At: time.Now()}))
+	if out := buf.String(); strings.Contains(out, "Gone") {
+		t.Errorf("logged a result for a view that no longer exists:\n%s", out)
 	}
 }

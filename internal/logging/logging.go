@@ -39,7 +39,7 @@ type rotatingFile struct {
 }
 
 func openRotating(path string, max int64) (*rotatingFile, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	w := &rotatingFile{path: path, max: max}
@@ -66,8 +66,13 @@ func (w *rotatingFile) open() error {
 func (w *rotatingFile) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.size > 0 && w.size+int64(len(p)) > w.max {
-		if err := w.rotate(); err != nil {
+	if w.f != nil && w.size > 0 && w.size+int64(len(p)) > w.max {
+		w.rotate()
+	}
+	if w.f == nil {
+		// Reopen on every write until it works, so logging recovers once
+		// the directory is writable again.
+		if err := w.open(); err != nil {
 			return 0, err
 		}
 	}
@@ -76,18 +81,22 @@ func (w *rotatingFile) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (w *rotatingFile) rotate() error {
-	if err := w.f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(w.path, w.path+".1"); err != nil {
-		return err
-	}
-	return w.open()
+// rotate moves the current file to <path>.1 and leaves the next Write to
+// open a fresh one. Rotation is best effort: if the file was deleted or
+// can't be moved, logging simply starts over at path.
+func (w *rotatingFile) rotate() {
+	w.f.Close()
+	w.f = nil
+	_ = os.Rename(w.path, w.path+".1")
 }
 
 func (w *rotatingFile) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.f.Close()
+	if w.f == nil {
+		return nil
+	}
+	err := w.f.Close()
+	w.f = nil
+	return err
 }

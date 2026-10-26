@@ -420,15 +420,18 @@ func (e *Engine) logAudit(prID, reviewID int64, kind, msg string) {
 	if msg != "" {
 		attrs = append(attrs, "detail", msg)
 	}
-	e.d.Log.Log(context.Background(), auditLevel(kind), kind, attrs...)
+	e.d.Log.Log(context.Background(), auditLogLevel(kind, msg), kind, attrs...)
 }
 
-// auditLevel grades audit kinds for the log: failures are errors, outcomes
-// that may need a look are warnings, everything else is information.
-func auditLevel(kind string) slog.Level {
+// auditLogLevel grades audit events for the log: failures are errors,
+// outcomes that may need a look are warnings, everything else (including the
+// routine "superseded" on every new push) is information.
+func auditLogLevel(kind, msg string) slog.Level {
 	switch {
 	case strings.Contains(kind, "failed"), kind == "blocked":
 		return slog.LevelError
+	case kind == "not approved" && strings.HasPrefix(msg, "superseded"):
+		return slog.LevelInfo
 	case kind == "interrupted", kind == "post unknown", kind == "not approved", kind == "opted out":
 		return slog.LevelWarn
 	}

@@ -88,3 +88,35 @@ func TestRotatesAtMaxSize(t *testing.T) {
 		t.Errorf("reopened over the cap: current %d bytes, want 60", len(cur))
 	}
 }
+
+func TestRotationSurvivesDeletedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghost.log")
+	w, err := openRotating(path, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	line := []byte(strings.Repeat("x", 59) + "\n")
+	w.Write(line)
+	os.Remove(path) // someone clears the log while Ghost runs
+	for i := 0; i < 3; i++ {
+		if _, err := w.Write(line); err != nil {
+			t.Fatalf("write %d after the file was deleted: %v", i, err)
+		}
+	}
+	if data, err := os.ReadFile(path); err != nil || len(data) == 0 {
+		t.Errorf("logging stopped after the file was deleted: %v, %d bytes", err, len(data))
+	}
+}
+
+func TestLogDirIsPrivate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state", "ghost")
+	_, closer, err := Open(filepath.Join(dir, "ghost.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closer.Close()
+	if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
+		t.Errorf("log dir mode = %v, want 0700", st.Mode().Perm())
+	}
+}

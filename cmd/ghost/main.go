@@ -273,6 +273,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		return nil
 	}
 	if err := d.runTUI(tui.New(opts)); err != nil {
+		logger.Error("tui failed", "err", err)
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}

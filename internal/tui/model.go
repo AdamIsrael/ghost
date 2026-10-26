@@ -85,6 +85,7 @@ type changeMsg struct{}
 
 type engineDoneMsg struct {
 	what string
+	pr   string // owner/repo#N the action was on
 	err  error
 }
 
@@ -220,7 +221,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case resultMsg:
-		if v, ok := m.viewNamed(msg.View); ok && msg.Query != "" && msg.Query != v.Query {
+		v, known := m.viewNamed(msg.View)
+		if known && msg.Query != "" && msg.Query != v.Query {
 			// From before the view was edited; the new query's result follows.
 			return m, waitForResult(m.opts.Results)
 		}
@@ -230,7 +232,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil || msg.PRs != nil {
 			m.lastPoll = msg.At // a failed poll doesn't count as polled
 		}
-		m.logPoll(msg)
+		if known { // a late result for a deleted view isn't worth logging
+			m.logPoll(msg)
+		}
 		if msg.Err != nil {
 			m.errs[msg.View] = msg.Err
 		} else {
@@ -254,7 +258,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case engineDoneMsg:
 		m.flash = ""
 		if msg.err != nil {
-			m.opts.Log.Error(msg.what+" failed", "err", msg.err)
+			m.opts.Log.Error(msg.what+" failed", "pr", msg.pr, "err", msg.err)
 			m.flash = msg.err.Error()
 			if !strings.HasPrefix(m.flash, msg.what+":") {
 				m.flash = msg.what + ": " + m.flash
@@ -330,7 +334,8 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		e, p := m.opts.Engine, *pr
-		return m, func() tea.Msg { return engineDoneMsg{"re-review", e.Rereview(p)} }
+		ref := fmt.Sprintf("%s#%d", p.Repo, p.Number)
+		return m, func() tea.Msg { return engineDoneMsg{"re-review", ref, e.Rereview(p)} }
 	case "P":
 		pr := m.selectedPR()
 		if pr == nil || m.opts.Engine == nil {
@@ -338,7 +343,7 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 		}
 		e, repo, n := m.opts.Engine, pr.Repo, pr.Number
 		return m, func() tea.Msg {
-			return engineDoneMsg{"post", e.PostPending(context.Background(), repo, n)}
+			return engineDoneMsg{"post", fmt.Sprintf("%s#%d", repo, n), e.PostPending(context.Background(), repo, n)}
 		}
 	case "p":
 		if m.opts.Engine != nil {
@@ -351,7 +356,7 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 		}
 		e, repo, n := m.opts.Engine, pr.Repo, pr.Number
 		return m, func() tea.Msg {
-			return engineDoneMsg{"approve", e.Approve(context.Background(), repo, n)}
+			return engineDoneMsg{"approve", fmt.Sprintf("%s#%d", repo, n), e.Approve(context.Background(), repo, n)}
 		}
 	case "t":
 		if m.opts.NoColor {

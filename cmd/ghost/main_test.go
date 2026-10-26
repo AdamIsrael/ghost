@@ -131,7 +131,7 @@ func TestUnwritableLogDoesNotStopGhost(t *testing.T) {
 	if code := run([]string{"--config", cfg, "--db", filepath.Join(dir, "g.db")}, &out, &errb, d); code != 0 || !*ran {
 		t.Fatalf("exit %d ran %v: %s", code, *ran, errb.String())
 	}
-	if !strings.Contains(errb.String(), "log") {
+	if !strings.Contains(errb.String(), "continuing without it") {
 		t.Errorf("should warn that the log can't be written: %q", errb.String())
 	}
 }

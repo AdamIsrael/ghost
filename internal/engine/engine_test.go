@@ -572,3 +572,15 @@ func TestFailedReviewIsLoggedAsError(t *testing.T) {
 		t.Errorf("full error text missing:\n%s", h.log.String())
 	}
 }
+
+func TestSupersededApprovalIsInfo(t *testing.T) {
+	if got := auditLogLevel("not approved", "superseded by review #7"); got != slog.LevelInfo {
+		t.Errorf("superseded: %v, want INFO", got)
+	}
+	if got := auditLogLevel("not approved", "CI is failing"); got != slog.LevelWarn {
+		t.Errorf("rule failure: %v, want WARN", got)
+	}
+	if got := auditLogLevel("post failed", "x"); got != slog.LevelError {
+		t.Errorf("post failed: %v, want ERROR", got)
+	}
+}

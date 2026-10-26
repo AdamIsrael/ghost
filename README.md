@@ -262,8 +262,8 @@ A file named after a built-in replaces it. `ghost --check` warns if your selecte
 The TUI has to cut long messages to fit. Ghost also writes every error in full, plus what it did (queued, posted, approved, labeled…), to `~/.local/state/ghost/ghost.log` (or `$XDG_STATE_HOME/ghost/ghost.log`):
 
 ```
-time=2026-10-26T15:41:02Z level=ERROR msg="poll failed" view=Team query="is:open is:pr org:acme" err="search: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)"
-time=2026-10-26T15:43:10Z level=INFO msg=posted pr=acme/api#42 review=17 detail="REQUEST_CHANGES, 3 comments"
+time=2026-10-26T11:41:02.318-04:00 level=ERROR msg="poll failed" view=Team query="is:open is:pr org:acme" err="search: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)"
+time=2026-10-26T11:43:10.904-04:00 level=INFO msg=posted pr=acme/api#42 review=17 detail="REQUEST_CHANGES with 3 inline comments"
 ```
 
 - Follow it while Ghost runs: `tail -f ~/.local/state/ghost/ghost.log`. Find problems: `grep -E 'level=(ERROR|WARN)' ~/.local/state/ghost/ghost.log`.
