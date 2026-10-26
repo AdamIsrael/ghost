@@ -205,3 +205,12 @@ func TestDeletedViewResultIsNotLogged(t *testing.T) {
 		t.Errorf("logged a result for a view that no longer exists:\n%s", out)
 	}
 }
+
+func TestDeletedViewResultLeavesNoState(t *testing.T) {
+	m, buf := logModel(t)
+	m = send(t, m, resultMsg(poller.Result{View: "Gone", Err: errors.New("HTTP 502"), At: time.Now()}))
+	if mm := m.(Model); mm.errs["Gone"] != nil || mm.prs["Gone"] != nil {
+		t.Errorf("a deleted view's late result was stored: errs %v prs %v", mm.errs["Gone"], mm.prs["Gone"])
+	}
+	_ = buf
+}

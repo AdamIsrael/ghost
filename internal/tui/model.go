@@ -222,8 +222,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 	case resultMsg:
 		v, known := m.viewNamed(msg.View)
-		if known && msg.Query != "" && msg.Query != v.Query {
-			// From before the view was edited; the new query's result follows.
+		if !known || (msg.Query != "" && msg.Query != v.Query) {
+			// From a view since deleted, or from before it was edited (the
+			// new query's result follows): don't keep or log it.
 			return m, waitForResult(m.opts.Results)
 		}
 		if m.opts.Engine != nil {
@@ -232,9 +233,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil || msg.PRs != nil {
 			m.lastPoll = msg.At // a failed poll doesn't count as polled
 		}
-		if known { // a late result for a deleted view isn't worth logging
-			m.logPoll(msg)
-		}
+		m.logPoll(msg)
 		if msg.Err != nil {
 			m.errs[msg.View] = msg.Err
 		} else {

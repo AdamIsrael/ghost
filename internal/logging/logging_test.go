@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,5 +119,18 @@ func TestLogDirIsPrivate(t *testing.T) {
 	closer.Close()
 	if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
 		t.Errorf("log dir mode = %v, want 0700", st.Mode().Perm())
+	}
+}
+
+func TestWriteAfterCloseIsDropped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghost.log")
+	w, _ := openRotating(path, 1000)
+	w.Write([]byte("before\n"))
+	w.Close()
+	if _, err := w.Write([]byte("after\n")); !errors.Is(err, os.ErrClosed) {
+		t.Errorf("write after Close: err = %v, want os.ErrClosed", err)
+	}
+	if data, _ := os.ReadFile(path); strings.Contains(string(data), "after") {
+		t.Errorf("a write after Close reopened the file: %q", data)
 	}
 }

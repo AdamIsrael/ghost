@@ -31,11 +31,12 @@ func Open(path string) (*slog.Logger, io.Closer, error) {
 
 // rotatingFile is an append-only file that rotates once it would grow past max.
 type rotatingFile struct {
-	mu   sync.Mutex
-	path string
-	max  int64
-	f    *os.File
-	size int64
+	mu     sync.Mutex
+	path   string
+	max    int64
+	f      *os.File
+	size   int64
+	closed bool // Close is final: later writes are dropped, never reopened
 }
 
 func openRotating(path string, max int64) (*rotatingFile, error) {
@@ -66,6 +67,9 @@ func (w *rotatingFile) open() error {
 func (w *rotatingFile) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		return 0, os.ErrClosed
+	}
 	if w.f != nil && w.size > 0 && w.size+int64(len(p)) > w.max {
 		w.rotate()
 	}
@@ -93,6 +97,7 @@ func (w *rotatingFile) rotate() {
 func (w *rotatingFile) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.closed = true
 	if w.f == nil {
 		return nil
 	}
