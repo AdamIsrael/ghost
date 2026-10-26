@@ -552,12 +552,10 @@ func TestAuditEventsAreLogged(t *testing.T) {
 	h := newHarness(t, nil)
 	h.start()
 	h.poll("Team", ghPR(1, "sha1"))
-	waitFor(t, "ready", func() bool { return h.state(1) == store.Ready })
-	out := h.log.String()
+	// The state is saved before its audit event is written, so wait for
+	// each line rather than reading the log once.
 	for _, want := range []string{"level=INFO msg=queued pr=o/r#1 review=1", "msg=started pr=o/r#1", "msg=\"ready to post\" pr=o/r#1"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("log missing %q:\n%s", want, out)
-		}
+		waitFor(t, "log line "+want, func() bool { return strings.Contains(h.log.String(), want) })
 	}
 }
 
