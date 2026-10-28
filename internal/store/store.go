@@ -3,6 +3,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -74,6 +75,9 @@ var migrations = []string{
 	);`,
 }
 
+// ErrLocked means another Ghost has the database open.
+var ErrLocked = errors.New("another ghost is already running")
+
 // Open opens (creating if needed) the database at path and applies migrations.
 // The database holds private PR content, so new files are owner-only.
 func Open(path string) (*Store, error) {
@@ -87,7 +91,7 @@ func Open(path string) (*Store, error) {
 	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		lock.Close()
-		return nil, fmt.Errorf("another ghost is already running with %s", path)
+		return nil, fmt.Errorf("%w with %s", ErrLocked, path)
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {

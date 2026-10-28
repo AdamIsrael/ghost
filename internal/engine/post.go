@@ -148,6 +148,33 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 // Rereview queues a fresh review of pr's head, using the PR's last agent (or
 // the default), unless one is already queued or running.
 func (e *Engine) Rereview(pr github.PR) error {
+	latest, err := e.d.Store.LatestReview(pr.Repo, pr.Number)
+	if err != nil {
+		return err
+	}
+	agentName := e.cfg.DefaultAgent
+	if latest != nil {
+		if _, ok := e.cfg.Agents[latest.Agent]; ok {
+			agentName = latest.Agent
+		}
+	}
+	return e.reviewNow(pr, agentName, "re-review requested")
+}
+
+// ReviewNow queues a review of pr right away with agentName ("" = the
+// default agent), as `ghost review <pr>` does: it runs even if this commit
+// was reviewed before, because someone asked for it.
+func (e *Engine) ReviewNow(pr github.PR, agentName string) error {
+	if agentName == "" {
+		agentName = e.cfg.DefaultAgent
+	}
+	if _, ok := e.cfg.Agents[agentName]; !ok {
+		return fmt.Errorf("unknown agent %q", agentName)
+	}
+	return e.reviewNow(pr, agentName, "review requested")
+}
+
+func (e *Engine) reviewNow(pr github.PR, agentName, why string) error {
 	e.rereviewMu.Lock()
 	defer e.rereviewMu.Unlock()
 	latest, err := e.d.Store.LatestReview(pr.Repo, pr.Number)
@@ -157,19 +184,13 @@ func (e *Engine) Rereview(pr github.PR) error {
 	if latest != nil && (latest.State == store.Queued || latest.State == store.Running) {
 		return errors.New("a review of this PR is already queued or running")
 	}
-	agentName := e.cfg.DefaultAgent
-	if latest != nil {
-		if _, ok := e.cfg.Agents[latest.Agent]; ok {
-			agentName = latest.Agent
-		}
-	}
 	prID, err := e.d.Store.UpsertPR(pr)
 	if err != nil {
 		return err
 	}
 	if !e.enqueueAudited(prID, pr.HeadSHA, agentName, true,
-		fmt.Sprintf("re-review requested, agent %s, commit %.7s", agentName, pr.HeadSHA)) {
-		return errors.New("could not queue the re-review")
+		fmt.Sprintf("%s, agent %s, commit %.7s", why, agentName, pr.HeadSHA)) {
+		return errors.New("could not queue the review")
 	}
 	e.poke()
 	return nil

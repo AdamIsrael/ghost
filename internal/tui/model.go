@@ -39,6 +39,7 @@ type Options struct {
 	ReviewLabel     string                    // review_label: the view form's default
 	MaxPRsPerView   int                       // max_prs_per_view: the view form's default
 	Log             *slog.Logger              // receives errors in full; nil = discard
+	ActiveView      string                    // view to start on (e.g. ghost review's one-off tab)
 }
 
 // Engine is what the TUI needs from the review engine.
@@ -115,6 +116,11 @@ func New(o Options) Model {
 	p, auto := resolvePalette(o, m.themes)
 	m.setPalette(p)
 	m.autoTheme = auto
+	for i, v := range m.views {
+		if v.Name == o.ActiveView {
+			m.active = i
+		}
+	}
 	return m
 }
 
@@ -387,6 +393,8 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 			m.flash = "view editing is unavailable"
 		case v.Source == "config.toml":
 			m.flash = fmt.Sprintf("view %q is defined in config.toml; edit it there", v.Name)
+		case v.Source == "session":
+			m.flash = fmt.Sprintf("%q is a one-off review tab (ghost review); it isn't saved and goes away when Ghost exits", v.Name)
 		case k == "e":
 			f := newViewForm(v, v.Name, m.opts.Agents, m.opts.ReviewLabel, m.opts.MaxPRsPerView)
 			m.form = &f
@@ -426,6 +434,9 @@ func (m Model) logPoll(r resultMsg) {
 		m.opts.Log.Info("poll recovered", "view", r.View)
 	}
 }
+
+// CurrentView returns the view whose tab is selected.
+func (m Model) CurrentView() (config.View, bool) { return m.currentView() }
 
 func (m Model) emptyMessage() string {
 	v, ok := m.currentView()

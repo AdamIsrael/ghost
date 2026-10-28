@@ -8,9 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/github"
+	"github.com/AdamIsrael/ghost/internal/store"
+	"github.com/AdamIsrael/ghost/internal/tui"
 	"github.com/AdamIsrael/ghost/internal/workspace"
 )
 
@@ -132,11 +135,11 @@ func TestReviewCleansUpOnAgentError(t *testing.T) {
 func TestReviewArgErrors(t *testing.T) {
 	h, d := newReviewHarness(t, "")
 	for name, args := range map[string][]string{
-		"no mode":       {"review", "o/r#7"},
-		"no pr":         {"review", "--dry-run"},
-		"bad pr":        {"review", "not-a-pr", "--dry-run"},
-		"unknown agent": {"review", "o/r#7", "--agent", "nope", "--dry-run"},
-		"both modes":    {"review", "o/r#7", "--dry-run", "--show-prompt"},
+		"unknown agent, no mode": {"review", "o/r#7", "--agent", "nope"},
+		"no pr":                  {"review", "--dry-run"},
+		"bad pr":                 {"review", "not-a-pr", "--dry-run"},
+		"unknown agent":          {"review", "o/r#7", "--agent", "nope", "--dry-run"},
+		"both modes":             {"review", "o/r#7", "--dry-run", "--show-prompt"},
 	} {
 		var out, errb bytes.Buffer
 		if code := run(append([]string{"--config", h.cfg}, args...), &out, &errb, d); code == 0 {
@@ -177,5 +180,52 @@ func TestReviewUsesCanonicalRepoName(t *testing.T) {
 	}
 	if checkedOut != "cli/cli" {
 		t.Errorf("checkout used %q; want GitHub's canonical name so case variants share one clone", checkedOut)
+	}
+}
+
+func TestReviewOpensTheTUIOnThePR(t *testing.T) {
+	h, d := newReviewHarness(t, "")
+	db := filepath.Join(t.TempDir(), "ghost.db")
+	var seen tui.Model
+	d.runTUI = func(m tea.Model) error {
+		seen = m.(tui.Model)
+		return nil
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"--config", h.cfg, "--db", db, "review", "https://github.com/o/my-repo/pull/7"}, &out, &errb, d); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if v, ok := seen.CurrentView(); !ok || v.Name != "my-repo#7" || v.PR != "o/my-repo#7" || v.Source != "session" {
+		t.Errorf("active view = %+v (ok %v), want the one-off my-repo#7 tab", v, ok)
+	}
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r, _ := st.LatestReview("o/my-repo", 7)
+	if r == nil || r.Agent != "claude" {
+		t.Fatalf("review = %+v, want one queued with the default agent", r)
+	}
+	evs, _ := st.Audit("o/my-repo", 7, 10)
+	if len(evs) == 0 || evs[0].Kind != "queued" || !strings.Contains(evs[0].Message, "review requested") {
+		t.Errorf("audit = %+v", evs)
+	}
+}
+
+func TestReviewWhileGhostRunsSaysWhatToDo(t *testing.T) {
+	h, d := newReviewHarness(t, "")
+	db := filepath.Join(t.TempDir(), "ghost.db")
+	held, err := store.Open(db) // another Ghost has the database
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	var out, errb bytes.Buffer
+	if code := run([]string{"--config", h.cfg, "--db", db, "review", "o/r#7"}, &out, &errb, d); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if msg := errb.String(); !strings.Contains(msg, "already running") || !strings.Contains(msg, "press r") {
+		t.Errorf("stderr = %q", msg)
 	}
 }

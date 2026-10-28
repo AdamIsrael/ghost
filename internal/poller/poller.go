@@ -3,6 +3,7 @@ package poller
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -146,7 +147,14 @@ func (p *Poller) poll(ctx context.Context, only []string) (retry []string, all b
 		}
 		polled++
 		limit := p.limitFor(v)
-		prs, total, err := p.searcher.SearchPRs(ctx, v.Query, limit)
+		var prs []github.PR
+		var total int
+		var err error
+		if v.PR != "" {
+			prs, total, err = p.fetchOne(ctx, v.PR)
+		} else {
+			prs, total, err = p.searcher.SearchPRs(ctx, v.Query, limit)
+		}
 		if ctx.Err() != nil {
 			return retry, false
 		}
@@ -163,6 +171,28 @@ func (p *Poller) poll(ctx context.Context, only []string) (retry []string, all b
 		}
 	}
 	return retry, polled > 0 && failed == polled
+}
+
+// prGetter is what a single-PR view needs; github.Client provides it.
+type prGetter interface {
+	GetPR(ctx context.Context, repo string, number int) (github.PRDetail, error)
+}
+
+// fetchOne loads the PR of a one-off view ("owner/repo#N") directly.
+func (p *Poller) fetchOne(ctx context.Context, ref string) ([]github.PR, int, error) {
+	g, ok := p.searcher.(prGetter)
+	if !ok {
+		return nil, 0, errors.New("this view needs a GitHub client that can fetch a single PR")
+	}
+	repo, n, err := github.ParsePRRef(ref)
+	if err != nil {
+		return nil, 0, err
+	}
+	d, err := g.GetPR(ctx, repo, n)
+	if err != nil {
+		return nil, 0, err
+	}
+	return []github.PR{d.PR}, 1, nil
 }
 
 // Backoff returns base × 2^failures, capped at 8× base.

@@ -3,6 +3,7 @@ package poller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -328,4 +329,54 @@ func TestDeletedViewIsNotRetried(t *testing.T) {
 		t.Fatalf("SetViews should poll the remaining views, got %q", a.View)
 	}
 	quiet(t, p, 250*time.Millisecond)
+}
+
+type prSearcher struct {
+	fakeSearcher
+	gets []string
+	err  error
+}
+
+func (f *prSearcher) GetPR(_ context.Context, repo string, n int) (github.PRDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gets = append(f.gets, fmt.Sprintf("%s#%d", repo, n))
+	if f.err != nil {
+		return github.PRDetail{}, f.err
+	}
+	return github.PRDetail{PR: github.PR{Repo: repo, Number: n, Title: "one"}}, nil
+}
+
+func TestSinglePRViewIsFetchedNotSearched(t *testing.T) {
+	f := &prSearcher{}
+	vs := []config.View{{Name: "A", Query: "qa"}, {Name: "my-repo#5", PR: "o/my-repo#5", Source: "session"}}
+	p := New(f, vs, time.Hour, nil)
+	go p.poll(context.Background(), nil)
+	next(t, p)
+	r := next(t, p)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r.View != "my-repo#5" || r.Err != nil || len(r.PRs) != 1 || r.PRs[0].Number != 5 || r.PRs[0].Repo != "o/my-repo" {
+		t.Errorf("result = %+v", r)
+	}
+	if len(f.gets) != 1 || f.gets[0] != "o/my-repo#5" || strings.Join(f.queries, ",") != "qa" {
+		t.Errorf("gets %v queries %v; the PR view must not be searched", f.gets, f.queries)
+	}
+}
+
+func TestSinglePRViewFailureIsRetriedLikeOthers(t *testing.T) {
+	f := &prSearcher{err: errTransient}
+	vs := []config.View{{Name: "A", Query: "qa"}, {Name: "one", PR: "o/r#5", Source: "session"}}
+	p := New(f, vs, time.Hour, nil)
+	p.retryBase = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	next(t, p)
+	if r := next(t, p); r.Err == nil {
+		t.Fatalf("want the fetch error: %+v", r)
+	}
+	if r := next(t, p); r.View != "one" {
+		t.Errorf("the failed PR view should be re-polled soon, got %q", r.View)
+	}
 }

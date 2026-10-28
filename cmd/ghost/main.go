@@ -3,12 +3,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -131,7 +133,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 	fs := flag.NewFlagSet("ghost", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: ghost [flags] [init | review <pr> [--agent NAME] (--dry-run | --show-prompt)]")
+		fmt.Fprintln(stderr, "usage: ghost [flags] [init | review <pr> [--agent NAME] [--dry-run | --show-prompt]]")
 		fs.PrintDefaults()
 	}
 	cfgPath := fs.String("config", paths.ConfigFile(), "path to config.toml")
@@ -157,7 +159,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 			fs.Usage()
 			return 2
 		}
-		return runReview(paths.ExpandHome(*cfgPath), fs.Args()[1:], stdout, stderr, d)
+		return runReview(paths.ExpandHome(*cfgPath), paths.ExpandHome(*dbPath), fs.Args()[1:], stdout, stderr, d)
 	}
 	if fs.NArg() > 0 || (isInit && *check) {
 		fs.Usage()
@@ -172,7 +174,46 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		return runCheck(*cfgPath, stdout, d.runner)
 	}
 
-	cfg, err := config.Load(*cfgPath)
+	return startGhost(*cfgPath, *dbPath, stdout, stderr, d, nil)
+}
+
+// oneOff is a PR named on the command line (ghost review <pr>): Ghost opens
+// on a tab for it and starts reviewing it.
+type oneOff struct {
+	repo   string
+	number int
+	agent  string // "" = default_agent
+}
+
+// oneOffView is the session-only tab for a ghost review PR, named after the
+// repository and number ("my-repo#7"), unique among views.
+func oneOffView(pr github.PR, once *oneOff, views []config.View) config.View {
+	repo := once.repo
+	if pr.Repo != "" {
+		repo = pr.Repo // GitHub's canonical name
+	}
+	short := repo
+	if i := strings.LastIndex(repo, "/"); i >= 0 {
+		short = repo[i+1:]
+	}
+	name := fmt.Sprintf("%s#%d", short, once.number)
+	for taken := true; taken; {
+		taken = false
+		for _, v := range views {
+			if v.Name == name {
+				name += " (review)"
+				taken = true
+				break
+			}
+		}
+	}
+	return config.View{Name: name, PR: fmt.Sprintf("%s#%d", repo, once.number), Source: "session"}
+}
+
+// startGhost runs the TUI with the engine and poller. once, if set, adds a
+// tab for that PR and starts reviewing it (ghost review <pr>).
+func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *oneOff) int {
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
@@ -186,8 +227,18 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
-	st, err := store.Open(*dbPath)
+	if once != nil && once.agent != "" {
+		if _, ok := cfg.Agents[once.agent]; !ok {
+			fmt.Fprintf(stderr, "ghost: unknown agent %q\n", once.agent)
+			return 1
+		}
+	}
+	st, err := store.Open(dbPath)
 	if err != nil {
+		if once != nil && errors.Is(err, store.ErrLocked) {
+			fmt.Fprintf(stderr, "ghost: %v\nGhost is already open: switch to it and press r on %s#%d there.\n", err, once.repo, once.number)
+			return 1
+		}
 		fmt.Fprintln(stderr, "ghost:", err)
 		return 1
 	}
@@ -201,7 +252,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		logger, logFile, _ = logging.Open("")
 	}
 	defer logFile.Close()
-	logger.Info("started", "version", versionString(), "config", *cfgPath, "db", *dbPath, "log", logPath)
+	logger.Info("started", "version", versionString(), "config", cfgPath, "db", dbPath, "log", logPath)
 	defer logger.Info("stopped")
 
 	opts := tui.Options{
@@ -211,7 +262,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		OpenURL:         d.openURL,
 		Theme:           cfg.Theme,
 		NoColor:         os.Getenv("NO_COLOR") != "",
-		ConfigPath:      *cfgPath,
+		ConfigPath:      cfgPath,
 		Themes:          themes,
 		ReviewLabel:     cfg.ReviewLabel,
 		Log:             logger,
@@ -236,12 +287,29 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		}
 	}()
 	opts.Engine = eng
+	views := cfg.Views
+	if once != nil {
+		// Fetch the PR first: a bad link fails here, before the TUI opens.
+		pctx, pcancel := context.WithTimeout(ctx, 30*time.Second)
+		pr, err := d.getPR(pctx, once.repo, once.number)
+		pcancel()
+		if err != nil {
+			fmt.Fprintln(stderr, "ghost:", err)
+			return 1
+		}
+		tab := oneOffView(pr.PR, once, views)
+		views = append(append([]config.View(nil), views...), tab)
+		opts.Views, opts.ActiveView = views, tab.Name
+		if err := eng.ReviewNow(pr.PR, once.agent); err != nil {
+			logger.Warn("review not started", "pr", tab.PR, "err", err)
+		}
+	}
 	var p *poller.Poller
 	if s, err := d.newSearcher(); err != nil {
 		opts.PollDisabled = "GitHub unavailable: " + err.Error()
 	} else {
 		// Started even with no views: views can be added from the TUI.
-		p = poller.New(s, cfg.Views, cfg.PollInterval.Duration, cfg.PRLimitFor)
+		p = poller.New(s, views, cfg.PollInterval.Duration, cfg.PRLimitFor)
 		go p.Run(ctx)
 		opts.Results, opts.PollNow = p.Results(), p.PollNow
 	}
@@ -249,15 +317,23 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		opts.Agents = append(opts.Agents, name)
 	}
 	sort.Strings(opts.Agents)
-	viewsPath := config.ViewsPath(*cfgPath)
+	viewsPath := config.ViewsPath(cfgPath)
 	opts.SaveViews = func(views []config.View) error {
+		// The one-off ghost review tab lives in the TUI only: never
+		// validated as a search or written to views.toml.
+		var saved []config.View
+		for _, v := range views {
+			if v.Source != "session" {
+				saved = append(saved, v)
+			}
+		}
 		next := cfg
-		next.Views = views
+		next.Views = saved
 		if err := next.ValidateViews(); err != nil {
 			return err
 		}
 		var managed []config.View
-		for _, v := range views {
+		for _, v := range saved {
 			if v.Source != "config.toml" {
 				managed = append(managed, v)
 			}
@@ -265,7 +341,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		if err := config.SaveViews(viewsPath, managed); err != nil {
 			return err
 		}
-		cfg.Views = views
+		cfg.Views = saved
 		eng.SetViews(views)
 		if p != nil {
 			p.SetViews(views)

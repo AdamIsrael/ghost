@@ -15,7 +15,10 @@ import (
 	"github.com/AdamIsrael/ghost/internal/textsafe"
 )
 
-func runReview(cfgPath string, args []string, stdout, stderr io.Writer, d deps) int {
+// runReview handles ghost review <pr>. With no mode flag it opens the TUI on
+// that PR and starts reviewing it; --dry-run reviews and prints without the
+// TUI or posting; --show-prompt prints the prompt and runs nothing.
+func runReview(cfgPath, dbPath string, args []string, stdout, stderr io.Writer, d deps) int {
 	fs := flag.NewFlagSet("ghost review", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	agentName := fs.String("agent", "", "agent from config (default: default_agent)")
@@ -32,12 +35,20 @@ func runReview(cfgPath string, args []string, stdout, stderr io.Writer, d deps) 
 	if ref == "" && fs.NArg() == 1 {
 		ref = fs.Arg(0)
 	} else if fs.NArg() > 0 || ref == "" {
-		fmt.Fprintln(stderr, "usage: ghost review <pr-url | owner/repo#N> [--agent NAME] (--dry-run | --show-prompt)")
+		fmt.Fprintln(stderr, "usage: ghost review <pr-url | owner/repo#N> [--agent NAME] [--dry-run | --show-prompt]")
 		return 2
 	}
-	if *dryRun == *showPrompt {
-		fmt.Fprintln(stderr, "ghost review: pass exactly one of --dry-run or --show-prompt (posting reviews arrives in M4)")
+	if *dryRun && *showPrompt {
+		fmt.Fprintln(stderr, "ghost review: pass at most one of --dry-run or --show-prompt")
 		return 2
+	}
+	if !*dryRun && !*showPrompt {
+		repo, number, err := github.ParsePRRef(ref)
+		if err != nil {
+			fmt.Fprintln(stderr, "ghost:", err)
+			return 1
+		}
+		return startGhost(cfgPath, dbPath, stdout, stderr, d, &oneOff{repo: repo, number: number, agent: *agentName})
 	}
 
 	cfg, err := config.Load(cfgPath)

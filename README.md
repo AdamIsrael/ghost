@@ -51,10 +51,11 @@ go install github.com/AdamIsrael/ghost/cmd/ghost@latest
    ghost
    ```
    The starter view lists PRs where your review is requested. Nothing is reviewed automatically until you turn on `auto_review` for a view, so nothing is spent yet.
-4. Try a single review without posting anything:
+4. Review one PR:
    ```bash
-   ghost review https://github.com/owner/repo/pull/123 --dry-run
+   ghost review https://github.com/owner/repo/pull/123
    ```
+   Ghost opens on a tab for that PR and starts reviewing it. When the review is ready, look it over in the detail pane and press `P` to post it, or don't. Add `--dry-run` to print the review in the terminal instead, without opening Ghost or posting.
 
 ## How it works
 
@@ -279,11 +280,14 @@ ghost [--config PATH] [--db PATH]                  start the TUI
 ghost [--config PATH] init                         write starter config, views and prompt
 ghost [--config PATH] --check                      check tools, login and config
 ghost --version                                    print the version
+ghost [--config PATH] [--db PATH] review <pr>      open Ghost on that PR and review it (post with P)
 ghost [--config PATH] review <pr> --dry-run        review one PR and print it; posts nothing
 ghost [--config PATH] review <pr> --show-prompt    print the prompt; runs nothing
 ```
 
 `<pr>` is a PR URL or `owner/repo#123`. Add `--agent NAME` to `review` to use a specific agent.
+
+`ghost review <pr>` adds a tab for that PR for this session only (it isn't saved to `views.toml`) and starts a review even if the PR's current commit was reviewed before, as pressing `r` does. Posting follows `post_mode` as usual. Only one Ghost can use the database at a time, so if Ghost is already open, switch to it and press `r` on the PR there.
 
 ## Files
 

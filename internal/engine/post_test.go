@@ -414,3 +414,41 @@ func TestDiffIsReadBeforeTheAgentRuns(t *testing.T) {
 		t.Errorf("the diff read after the agent ran: inline %d unattached %d", len(p.Comments), len(p.Unattached))
 	}
 }
+
+func TestReviewNowUsesTheGivenAgent(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) {
+		c.Agents["sec"] = config.Agent{Kind: "claude", Prompt: "Review {{.Repo}}"}
+	})
+	h.start()
+	if err := h.e.ReviewNow(ghPR(1, "sha1"), "sec"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "queued", func() bool { return h.state(1) != "" })
+	r, _ := h.st.LatestReview("o/r", 1)
+	if r.Agent != "sec" {
+		t.Errorf("agent = %q, want sec", r.Agent)
+	}
+	h.waitAudit(t, 1, "queued")
+	if a := h.e.PRState("o/r", 1).Audit; !strings.Contains(a[0].Message, "review requested") {
+		t.Errorf("queued audit = %q", a[0].Message)
+	}
+}
+
+func TestReviewNowDefaultsToTheDefaultAgent(t *testing.T) {
+	h := newHarness(t, nil)
+	h.start()
+	if err := h.e.ReviewNow(ghPR(1, "sha1"), ""); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "queued", func() bool { return h.state(1) != "" })
+	if r, _ := h.st.LatestReview("o/r", 1); r.Agent != "claude" {
+		t.Errorf("agent = %q, want the default (claude)", r.Agent)
+	}
+}
+
+func TestReviewNowRejectsUnknownAgent(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.e.ReviewNow(ghPR(1, "sha1"), "nope"); err == nil || !strings.Contains(err.Error(), `"nope"`) {
+		t.Errorf("err = %v", err)
+	}
+}

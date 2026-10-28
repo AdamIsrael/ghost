@@ -214,3 +214,32 @@ func TestDeletedViewResultLeavesNoState(t *testing.T) {
 	}
 	_ = buf
 }
+
+var withSession = append(append([]config.View(nil), twoViews...), config.View{Name: "my-repo#5", PR: "o/my-repo#5", Source: "session"})
+
+func TestStartsOnTheActiveView(t *testing.T) {
+	m := send(t, New(Options{Views: withSession, ActiveView: "my-repo#5", SaveViews: func([]config.View) error { return nil }}),
+		tea.WindowSizeMsg{Width: 160, Height: 10},
+		resultMsg(poller.Result{View: "my-repo#5", PRs: []github.PR{samplePR(5, "the one")}, At: time.Now()}))
+	if mm := m.(Model); mm.active != 2 {
+		t.Fatalf("active view = %d, want the one-off tab (2)", mm.active)
+	}
+	if out := screen(m); !strings.Contains(out, "the one") {
+		t.Errorf("the one-off PR should be listed and selected:\n%s", out)
+	}
+}
+
+func TestSessionViewCantBeEditedOrDeleted(t *testing.T) {
+	saved := 0
+	for _, k := range []string{"e", "d"} {
+		m := send(t, New(Options{Views: withSession, ActiveView: "my-repo#5", SaveViews: func([]config.View) error { saved++; return nil }}),
+			tea.WindowSizeMsg{Width: 160, Height: 10}, key(k))
+		mm := m.(Model)
+		if mm.form != nil || mm.confirmDelete != "" || !strings.Contains(mm.flash, "one-off") {
+			t.Errorf("%s on the session tab: form %v confirm %q flash %q", k, mm.form != nil, mm.confirmDelete, mm.flash)
+		}
+	}
+	if saved != 0 {
+		t.Errorf("SaveViews called %d times", saved)
+	}
+}

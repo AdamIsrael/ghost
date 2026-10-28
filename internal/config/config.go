@@ -80,9 +80,13 @@ type View struct {
 	// MaxPRs overrides max_prs_per_view for this view; 0 = use it.
 	MaxPRs int `toml:"max_prs,omitzero"`
 
-	// Source is the file that defined the view: "config.toml" or
-	// "views.toml". Only views.toml views are edited from the TUI.
+	// Source is where the view came from: "config.toml", "views.toml", or
+	// "session" for a one-off view that is never saved. Only views.toml
+	// views are edited from the TUI.
 	Source string `toml:"-"`
+	// PR ("owner/repo#N") makes this a one-off view of a single PR, fetched
+	// directly instead of searched. Never saved.
+	PR string `toml:"-"`
 }
 
 // Default returns the configuration used for any key the file leaves unset.
