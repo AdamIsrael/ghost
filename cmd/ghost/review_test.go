@@ -238,8 +238,13 @@ func TestBadPRFailsBeforeTheEngineRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prID, _ := st.UpsertPR(github.PR{Repo: "o/other", Number: 1, HeadSHA: "abc"})
-	st.EnqueueReview(prID, "abc", "claude", false)
+	prID, err := st.UpsertPR(github.PR{Repo: "o/other", Number: 1, HeadSHA: "abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := st.EnqueueReview(prID, "abc", "claude", false); err != nil || !ok {
+		t.Fatalf("seeding the queued review: ok %v err %v", ok, err)
+	}
 	st.Close()
 
 	d.getPR = func(context.Context, string, int) (github.PRDetail, error) {
