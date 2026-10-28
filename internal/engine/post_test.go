@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"errors"
+	"github.com/AdamIsrael/ghost/internal/agent"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 
@@ -235,5 +237,147 @@ func TestPostCustomFooter(t *testing.T) {
 	want := "Needs a nil check.\n\n<sub>claude (m1) · o/r#1 · 0123456</sub>\n" + marker(1)
 	if got := h.posts[0].Body; got != want {
 		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+const aGoDiff = `diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -1,4 +1,5 @@
+ package a
++// new
+ func A() {
+ }
+ 
+`
+
+func TestCommentsOutsideDiffAreListedInBody(t *testing.T) {
+	h := newHarness(t, nil)
+	h.diff = aGoDiff
+	h.rev.res.Comments = []agent.InlineComment{
+		{Path: "a.go", Line: 3, Body: "in the diff", Severity: "nit"},
+		{Path: "a.go", Line: 50, Body: "outside it", Severity: "blocking"},
+	}
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	p := h.posts[0]
+	if len(p.Comments) != 1 || p.Comments[0].Line != 3 || len(p.Unattached) != 1 || p.Unattached[0].Line != 50 {
+		t.Fatalf("inline %+v unattached %+v", p.Comments, p.Unattached)
+	}
+	evs := h.e.PRState("o/r", 1).Audit
+	if msg := evs[len(evs)-1].Message; !strings.Contains(msg, "1 inline comments") || !strings.Contains(msg, "1 outside the diff") {
+		t.Errorf("posted audit = %q", msg)
+	}
+}
+
+func TestAgentCannotForceOutsideDiff(t *testing.T) {
+	h := newHarness(t, nil)
+	h.diff = aGoDiff
+	h.rev.res.Comments = []agent.InlineComment{{Path: "a.go", Line: 3, Body: "x", Severity: "nit", OutsideDiff: true}}
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	h.e.PostPending(context.Background(), "o/r", 1)
+	if p := h.posts[0]; len(p.Comments) != 1 || len(p.Unattached) != 0 {
+		t.Errorf("Ghost's own diff check must decide: inline %d unattached %d", len(p.Comments), len(p.Unattached))
+	}
+}
+
+func TestUnreadableDiffKeepsCommentsInline(t *testing.T) {
+	h := newHarness(t, nil) // h.diff == "": the diff can't be read
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	h.e.PostPending(context.Background(), "o/r", 1)
+	if p := h.posts[0]; len(p.Comments) != 1 || len(p.Unattached) != 0 {
+		t.Errorf("without a diff, comments stay inline (GitHub decides): inline %d unattached %d", len(p.Comments), len(p.Unattached))
+	}
+}
+
+func TestFoldReasonIsAudited(t *testing.T) {
+	h := newHarness(t, nil)
+	h.postFn = func(github.ReviewPost) (github.PostResult, error) {
+		return github.PostResult{Folded: true, FoldReason: "Pull request review thread line must be part of the diff"}, nil
+	}
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	h.e.PostPending(context.Background(), "o/r", 1)
+	evs := h.e.PRState("o/r", 1).Audit
+	if msg := evs[len(evs)-1].Message; !strings.Contains(msg, "GitHub: Pull request review thread line must be part of the diff") {
+		t.Errorf("posted audit = %q", msg)
+	}
+}
+
+func transientHarness(t *testing.T, fails int) *harness {
+	h := newHarness(t, nil)
+	h.e.postRetryDelays = []time.Duration{0, 0}
+	n := 0
+	h.postFn = func(github.ReviewPost) (github.PostResult, error) {
+		n++
+		if n <= fails {
+			return github.PostResult{}, &api.HTTPError{StatusCode: 502, Message: "Bad Gateway"}
+		}
+		return github.PostResult{}, nil
+	}
+	return h
+}
+
+func TestTransientPostIsRetried(t *testing.T) {
+	h := transientHarness(t, 1)
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	if h.state(1) != store.Posted || h.postCount() != 2 || h.hasRevCalls != 1 {
+		t.Errorf("state %s posts %d marker checks %d", h.state(1), h.postCount(), h.hasRevCalls)
+	}
+}
+
+func TestTransientPostThatReachedGitHubIsNotReposted(t *testing.T) {
+	h := transientHarness(t, 1)
+	h.onGH = true // the 502 hid a review GitHub did create
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	if h.state(1) != store.Posted || h.postCount() != 1 {
+		t.Errorf("state %s posts %d; must not post twice", h.state(1), h.postCount())
+	}
+}
+
+func TestTransientPostGivesUp(t *testing.T) {
+	h := transientHarness(t, 100)
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	if err := h.e.PostPending(context.Background(), "o/r", 1); err == nil {
+		t.Fatal("want an error after the retries")
+	}
+	if h.state(1) != store.PostUnknown || h.postCount() != 3 {
+		t.Errorf("state %s posts %d; want post-unknown after 3 attempts", h.state(1), h.postCount())
+	}
+}
+
+func TestClientErrorIsNotRetried(t *testing.T) {
+	h := newHarness(t, nil)
+	h.e.postRetryDelays = []time.Duration{0, 0}
+	h.postFn = func(github.ReviewPost) (github.PostResult, error) {
+		return github.PostResult{}, &api.HTTPError{StatusCode: 422, Message: "Validation Failed"}
+	}
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	h.e.PostPending(context.Background(), "o/r", 1)
+	if h.postCount() != 1 || h.state(1) != store.Ready {
+		t.Errorf("posts %d state %s", h.postCount(), h.state(1))
 	}
 }

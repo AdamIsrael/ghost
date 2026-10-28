@@ -150,7 +150,7 @@ func (m *Manager) writeContext(ctx context.Context, ws *Workspace, baseRef strin
 		path string
 		args []string
 	}{
-		{ws.DiffPath, []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", base + "...HEAD"}},
+		{ws.DiffPath, []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", base + "...HEAD"}},
 		{ws.CommitsPath, []string{"log", "--no-color", "--format=commit %H%nAuthor: %an%n%n%B", base + "..HEAD"}},
 	}
 	for _, o := range outputs {

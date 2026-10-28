@@ -34,12 +34,16 @@ type ReviewPost struct {
 	Event    string          `json:"event"` // COMMENT, REQUEST_CHANGES or APPROVE
 	Body     string          `json:"body"`
 	Comments []ReviewComment `json:"comments,omitempty"`
+	// Unattached are comments on lines outside the PR's diff, which GitHub
+	// won't accept inline; PostReview lists them in the body instead.
+	Unattached []ReviewComment `json:"-"`
 }
 
 // PostResult says which fallbacks PostReview needed.
 type PostResult struct {
-	Folded     bool // inline comments moved into the body
-	Downgraded bool // event changed to COMMENT
+	Folded     bool   // inline comments moved into the body after GitHub rejected them
+	FoldReason string // GitHub's reason for rejecting them
+	Downgraded bool   // event changed to COMMENT
 }
 
 // PostReview submits a review. GitHub answers 422 both when you request
@@ -54,6 +58,10 @@ func (c *Client) PostReview(ctx context.Context, repo string, number int, p Revi
 			p.Comments[i].Side = "RIGHT"
 		}
 	}
+	if len(p.Unattached) > 0 {
+		p.Body += foldComments(p.Unattached, "outside the lines this PR changes, so GitHub can't attach them")
+		p.Unattached = nil
+	}
 	var res PostResult
 	err := c.post(ctx, path, p)
 	if ownPR(err) && p.Event != "COMMENT" {
@@ -62,7 +70,12 @@ func (c *Client) PostReview(ctx context.Context, repo string, number int, p Revi
 		err = c.post(ctx, path, p)
 	}
 	if unprocessable(err) && len(p.Comments) > 0 {
-		p.Body += foldComments(p.Comments)
+		res.FoldReason = reason(err)
+		why := "GitHub could not attach these to the diff"
+		if res.FoldReason != "" {
+			why += ": " + res.FoldReason
+		}
+		p.Body += foldComments(p.Comments, why)
 		p.Comments = nil
 		res.Folded = true
 		err = c.post(ctx, path, p)
@@ -105,9 +118,28 @@ func ownPR(err error) bool {
 	return strings.Contains(strings.ToLower(strings.Join(texts, " ")), "your own pull request")
 }
 
-func foldComments(cs []ReviewComment) string {
+// reason returns GitHub's explanation for a rejected request: the error items'
+// messages, or the response message when there are none.
+func reason(err error) string {
+	var h *api.HTTPError
+	if !errors.As(err, &h) {
+		return ""
+	}
+	var msgs []string
+	for _, item := range h.Errors {
+		if m := strings.TrimSpace(item.Message); m != "" {
+			msgs = append(msgs, m)
+		}
+	}
+	if len(msgs) == 0 {
+		return strings.TrimSpace(h.Message)
+	}
+	return strings.Join(msgs, "; ")
+}
+
+func foldComments(cs []ReviewComment, why string) string {
 	var b strings.Builder
-	b.WriteString("\n\n**Inline comments** (GitHub could not attach these to the diff):\n")
+	fmt.Fprintf(&b, "\n\n**Inline comments** (%s):\n", why)
 	for _, c := range cs {
 		fmt.Fprintf(&b, "- `%s:%d` %s\n", c.Path, c.Line, strings.ReplaceAll(c.Body, "\n", " "))
 	}

@@ -217,3 +217,36 @@ func TestAddLabelError(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestUnattachedCommentsGoInTheBodyUpFront(t *testing.T) {
+	f := &fakeREST{}
+	p := samplePost()
+	p.Unattached = []ReviewComment{{Path: "b.go", Line: 99, Body: "**Nit:** outside the diff"}}
+	res, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, p)
+	if err != nil || res.Folded || len(f.calls) != 1 {
+		t.Fatalf("res %+v err %v calls %d", res, err, len(f.calls))
+	}
+	body := f.calls[0].body
+	if len(body.Comments) != 1 || body.Comments[0].Path != "a.go" {
+		t.Errorf("inline comments = %+v; the in-diff one should stay inline", body.Comments)
+	}
+	if !strings.Contains(body.Body, "outside the lines this PR changes") || !strings.Contains(body.Body, "`b.go:99` **Nit:** outside the diff") {
+		t.Errorf("body = %q", body.Body)
+	}
+	if strings.Contains(string(f.calls[0].raw), "Unattached") || strings.Contains(string(f.calls[0].raw), "unattached") {
+		t.Errorf("Unattached leaked into the request: %s", f.calls[0].raw)
+	}
+}
+
+func TestFoldRecordsGitHubsReason(t *testing.T) {
+	why := &api.HTTPError{StatusCode: 422, Message: "Unprocessable Entity",
+		Errors: []api.HTTPErrorItem{{Message: "Pull request review thread line must be part of the diff"}}}
+	f := &fakeREST{errs: []error{why}}
+	res, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, samplePost())
+	if err != nil || !res.Folded || res.FoldReason != "Pull request review thread line must be part of the diff" {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if body := f.calls[1].body.Body; !strings.Contains(body, "GitHub could not attach these to the diff: Pull request review thread line must be part of the diff") {
+		t.Errorf("body = %q", body)
+	}
+}

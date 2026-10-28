@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/AdamIsrael/ghost/internal/difflines"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +75,11 @@ type Engine struct {
 	labelErr  map[int64]string    // PR ID → last label add/check failure audited
 	paused    bool
 	running   int
+
+	// postRetryDelays are the waits before re-posting a review after a
+	// transient failure (5xx, network); GitHub is checked for the review's
+	// marker first, so it's never posted twice.
+	postRetryDelays []time.Duration
 }
 
 func New(cfg config.Config, d Deps) *Engine {
@@ -89,7 +96,9 @@ func New(cfg config.Config, d Deps) *Engine {
 		wake:      make(chan struct{}, 1),
 		changes:   make(chan struct{}, 1),
 		unknownAt: map[int64]time.Time{},
-		labelErr:  map[int64]string{},
+
+		postRetryDelays: []time.Duration{5 * time.Second, 15 * time.Second},
+		labelErr:        map[int64]string{},
 	}
 }
 
@@ -366,6 +375,7 @@ func (e *Engine) review(ctx context.Context, r *store.Review) error {
 	if err != nil {
 		return err
 	}
+	res.Comments = markOutsideDiff(res.Comments, ws.DiffPath)
 	comments, err := json.Marshal(res.Comments)
 	if err != nil {
 		return err
@@ -387,6 +397,24 @@ func (e *Engine) review(ctx context.Context, r *store.Review) error {
 	}
 	e.audit(r.PRID, r.ID, "ready to post", "press P to post it")
 	return nil
+}
+
+// markOutsideDiff returns a copy of comments with lines GitHub won't accept
+// inline (not on the new side of the reviewed diff) flagged. Ghost decides,
+// not the agent. If the diff can't be read, nothing is flagged and GitHub
+// decides when posting. It copies so it never writes to the reviewer's result.
+func markOutsideDiff(comments []agent.InlineComment, diffPath string) []agent.InlineComment {
+	out := make([]agent.InlineComment, len(comments))
+	copy(out, comments)
+	data, err := os.ReadFile(diffPath)
+	var lines difflines.Map
+	if err == nil {
+		lines = difflines.Parse(string(data))
+	}
+	for i, c := range out {
+		out[i].OutsideDiff = lines != nil && !lines.Has(c.Path, c.Line)
+	}
+	return out
 }
 
 func reviewText(summary string, comments []agent.InlineComment) string {

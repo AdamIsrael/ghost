@@ -22,6 +22,9 @@ type InlineComment struct {
 	Line     int    `json:"line"`
 	Body     string `json:"body"`
 	Severity string `json:"severity"` // "blocking" or "nit"
+	// OutsideDiff is set by Ghost (not the agent) when Line isn't part of
+	// the PR's diff, so GitHub won't accept the comment inline.
+	OutsideDiff bool `json:"outside_diff,omitempty"`
 }
 
 type ReviewResult struct {

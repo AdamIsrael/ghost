@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -69,6 +70,8 @@ type harness struct {
 	addLabelErr   error
 	addLabelBlock chan struct{} // if set, AddLabel waits for it to close
 	getPRBlock    chan struct{} // if set, GetPR waits for it to close
+	diff          string        // diff.patch the review sees; "" = unreadable
+	hasRevCalls   int
 	log           *lockedBuffer // what the engine logged
 }
 
@@ -139,12 +142,23 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 			return nil
 		},
 		Checkout: func(_ context.Context, repo string, n int, base, sha string) (workspace.Workspace, func(), error) {
-			return workspace.Workspace{Dir: "/wt", ContextDir: "/ctx", DiffPath: "/ctx/diff.patch", CommitsPath: "/ctx/commits.txt"}, func() {}, nil
+			ws := workspace.Workspace{Dir: "/wt", ContextDir: "/ctx", DiffPath: "/ctx/diff.patch", CommitsPath: "/ctx/commits.txt"}
+			h.mu.Lock()
+			diff := h.diff
+			h.mu.Unlock()
+			if diff != "" { // otherwise the diff is unreadable, as if it vanished
+				ws.DiffPath = filepath.Join(t.TempDir(), "diff.patch")
+				if err := os.WriteFile(ws.DiffPath, []byte(diff), 0o600); err != nil {
+					return workspace.Workspace{}, nil, err
+				}
+			}
+			return ws, func() {}, nil
 		},
 		NewReviewer: func(string, config.Agent) (agent.Reviewer, error) { return h.rev, nil },
 		HasReview: func(_ context.Context, repo string, n int, marker string) (bool, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
+			h.hasRevCalls++
 			return h.onGH, h.hasRevErr
 		},
 		Now: func() time.Time {

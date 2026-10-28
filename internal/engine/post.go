@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/config"
@@ -97,9 +98,14 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 		if c.Severity == "blocking" {
 			label = "**Blocking:** "
 		}
-		p.Comments = append(p.Comments, github.ReviewComment{Path: c.Path, Line: c.Line, Body: label + c.Body})
+		rc := github.ReviewComment{Path: c.Path, Line: c.Line, Body: label + c.Body}
+		if c.OutsideDiff {
+			p.Unattached = append(p.Unattached, rc)
+		} else {
+			p.Comments = append(p.Comments, rc)
+		}
 	}
-	res, err := e.d.PostReview(ctx, r.Repo, r.Number, p)
+	res, err := e.postWithRetry(ctx, r, p)
 	if err != nil {
 		if github.IsClientError(err) {
 			r.State = store.Ready
@@ -115,8 +121,16 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 	r.State = store.Posted
 	e.save(r)
 	msg := fmt.Sprintf("%s with %d inline comments", p.Event, len(p.Comments))
+	if n := len(p.Unattached); n > 0 {
+		msg += fmt.Sprintf("; %d outside the diff listed in the body", n)
+	}
 	if res.Folded {
-		msg += "; comments folded into the body (GitHub rejected their positions)"
+		msg += "; inline comments folded into the body"
+		if res.FoldReason != "" {
+			msg += " (GitHub: " + res.FoldReason + ")"
+		} else {
+			msg += " (GitHub rejected their positions)"
+		}
 	}
 	if res.Downgraded {
 		msg += "; posted as a comment (GitHub rejected the review event)"
@@ -163,4 +177,30 @@ func (e *Engine) message(text string, r *store.Review) (string, error) {
 		Agent: r.Agent, Model: e.cfg.Agents[r.Agent].Model,
 		Repo: r.Repo, Number: r.Number, HeadSHA: fmt.Sprintf("%.7s", r.HeadSHA),
 	})
+}
+
+// postWithRetry posts p, retrying transient failures (GitHub 5xx, network)
+// after each of e.postRetryDelays. Before each retry it checks GitHub for the
+// review's marker: a failed response may hide a review GitHub did create.
+func (e *Engine) postWithRetry(ctx context.Context, r *store.Review, p github.ReviewPost) (github.PostResult, error) {
+	res, err := e.d.PostReview(ctx, r.Repo, r.Number, p)
+	for _, d := range e.postRetryDelays {
+		if err == nil || !github.Transient(err) || e.d.HasReview == nil {
+			return res, err
+		}
+		select {
+		case <-ctx.Done():
+			return res, err
+		case <-time.After(d):
+		}
+		found, herr := e.d.HasReview(ctx, r.Repo, r.Number, marker(r.ID))
+		if herr != nil {
+			return res, err // can't tell; leave it post-unknown
+		}
+		if found {
+			return github.PostResult{}, nil
+		}
+		res, err = e.d.PostReview(ctx, r.Repo, r.Number, p)
+	}
+	return res, err
 }
