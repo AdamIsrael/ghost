@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/AdamIsrael/ghost/internal/difflines"
 	"log/slog"
 	"os"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/config"
+	"github.com/AdamIsrael/ghost/internal/difflines"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/poller"
 	"github.com/AdamIsrael/ghost/internal/secrets"
@@ -367,6 +367,9 @@ func (e *Engine) review(ctx context.Context, r *store.Review) error {
 	}
 	defer cleanup()
 
+	// Read the diff before the agent runs: it decides which comments GitHub
+	// will take inline, so the agent mustn't be able to influence it.
+	lines := readDiffLines(ws.DiffPath)
 	r.Prompt = agent.BuildPrompt(rendered, ws.DiffPath, ws.CommitsPath)
 	res, err := reviewer.Review(ctx, agent.ReviewRequest{
 		Dir: ws.Dir, ContextDir: ws.ContextDir, Prompt: r.Prompt, MaxCostUSD: e.cfg.MaxCostPerReviewUSD,
@@ -375,7 +378,7 @@ func (e *Engine) review(ctx context.Context, r *store.Review) error {
 	if err != nil {
 		return err
 	}
-	res.Comments = markOutsideDiff(res.Comments, ws.DiffPath)
+	res.Comments = markOutsideDiff(res.Comments, lines)
 	comments, err := json.Marshal(res.Comments)
 	if err != nil {
 		return err
@@ -399,18 +402,22 @@ func (e *Engine) review(ctx context.Context, r *store.Review) error {
 	return nil
 }
 
+// readDiffLines parses the reviewed diff; nil if it can't be read.
+func readDiffLines(path string) difflines.Map {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return difflines.Parse(string(data))
+}
+
 // markOutsideDiff returns a copy of comments with lines GitHub won't accept
 // inline (not on the new side of the reviewed diff) flagged. Ghost decides,
-// not the agent. If the diff can't be read, nothing is flagged and GitHub
-// decides when posting. It copies so it never writes to the reviewer's result.
-func markOutsideDiff(comments []agent.InlineComment, diffPath string) []agent.InlineComment {
+// not the agent. With no diff (nil), nothing is flagged and GitHub decides
+// when posting. It copies so it never writes to the reviewer's result.
+func markOutsideDiff(comments []agent.InlineComment, lines difflines.Map) []agent.InlineComment {
 	out := make([]agent.InlineComment, len(comments))
 	copy(out, comments)
-	data, err := os.ReadFile(diffPath)
-	var lines difflines.Map
-	if err == nil {
-		lines = difflines.Parse(string(data))
-	}
 	for i, c := range out {
 		out[i].OutsideDiff = lines != nil && !lines.Has(c.Path, c.Line)
 	}

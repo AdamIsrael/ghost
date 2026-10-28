@@ -150,7 +150,12 @@ func (m *Manager) writeContext(ctx context.Context, ws *Workspace, baseRef strin
 		path string
 		args []string
 	}{
-		{ws.DiffPath, []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", base + "...HEAD"}},
+		{ws.DiffPath, []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color",
+			// Pin what GitHub's PR diff uses, so the operator's git config
+			// (diff.context, noprefix, renames, algorithm…) can't change which
+			// lines Ghost thinks GitHub will accept comments on.
+			"--src-prefix=a/", "--dst-prefix=b/", "-U3", "--inter-hunk-context=0", "-M", "--diff-algorithm=myers",
+			base + "...HEAD"}},
 		{ws.CommitsPath, []string{"log", "--no-color", "--format=commit %H%nAuthor: %an%n%n%B", base + "..HEAD"}},
 	}
 	for _, o := range outputs {

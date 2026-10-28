@@ -26,14 +26,18 @@ type fakeReviewer struct {
 	res     agent.ReviewResult
 	err     error
 	release chan struct{} // if set, Review blocks until it is closed
+	during  func()        // if set, runs while the agent "works"
 }
 
 func (f *fakeReviewer) Name() string { return "fake" }
 func (f *fakeReviewer) Review(ctx context.Context, req agent.ReviewRequest) (agent.ReviewResult, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, req)
-	release := f.release
+	release, during := f.release, f.during
 	f.mu.Unlock()
+	if during != nil {
+		during()
+	}
 	if release != nil {
 		select {
 		case <-release:
@@ -71,6 +75,7 @@ type harness struct {
 	addLabelBlock chan struct{} // if set, AddLabel waits for it to close
 	getPRBlock    chan struct{} // if set, GetPR waits for it to close
 	diff          string        // diff.patch the review sees; "" = unreadable
+	diffPath      string        // where the last checkout wrote it
 	hasRevCalls   int
 	log           *lockedBuffer // what the engine logged
 }
@@ -151,6 +156,9 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 				if err := os.WriteFile(ws.DiffPath, []byte(diff), 0o600); err != nil {
 					return workspace.Workspace{}, nil, err
 				}
+				h.mu.Lock()
+				h.diffPath = ws.DiffPath
+				h.mu.Unlock()
 			}
 			return ws, func() {}, nil
 		},
@@ -596,3 +604,11 @@ func TestSupersededApprovalIsInfo(t *testing.T) {
 		t.Errorf("post failed: %v, want ERROR", got)
 	}
 }
+
+func (h *harness) postAt(i int) github.ReviewPost {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.posts[i]
+}
+
+func (h *harness) hasRevCallCount() int { h.mu.Lock(); defer h.mu.Unlock(); return h.hasRevCalls }

@@ -59,7 +59,7 @@ func (c *Client) PostReview(ctx context.Context, repo string, number int, p Revi
 		}
 	}
 	if len(p.Unattached) > 0 {
-		p.Body += foldComments(p.Unattached, "outside the lines this PR changes, so GitHub can't attach them")
+		p.Body += foldComments(p.Unattached, "not part of this PR's diff, so GitHub can't attach them")
 		p.Unattached = nil
 	}
 	var res PostResult
@@ -131,17 +131,35 @@ func reason(err error) string {
 			msgs = append(msgs, m)
 		}
 	}
+	text := strings.Join(msgs, "; ")
 	if len(msgs) == 0 {
-		return strings.TrimSpace(h.Message)
+		text = h.Message
 	}
-	return strings.Join(msgs, "; ")
+	// One line, bounded: it goes into a markdown heading and the audit trail.
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) > maxReason {
+		text = text[:maxReason] + "…"
+	}
+	return text
 }
+
+const (
+	maxReason = 200
+	// maxFolded bounds the comment list put into a review body, keeping it
+	// well under GitHub's 65,536-character limit.
+	maxFolded = 30000
+)
 
 func foldComments(cs []ReviewComment, why string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n\n**Inline comments** (%s):\n", why)
-	for _, c := range cs {
-		fmt.Fprintf(&b, "- `%s:%d` %s\n", c.Path, c.Line, strings.ReplaceAll(c.Body, "\n", " "))
+	for i, c := range cs {
+		line := fmt.Sprintf("- `%s:%d` %s\n", c.Path, c.Line, strings.ReplaceAll(c.Body, "\n", " "))
+		if b.Len()+len(line) > maxFolded {
+			fmt.Fprintf(&b, "- …and %d more not shown (GitHub limits a review's length)\n", len(cs)-i)
+			break
+		}
+		b.WriteString(line)
 	}
 	return b.String()
 }
@@ -156,7 +174,11 @@ func (c *Client) HasReview(ctx context.Context, repo string, number int, marker 
 			Body string `json:"body"`
 		}
 		path := fmt.Sprintf("repos/%s/pulls/%d/reviews?per_page=%d&page=%d", repo, number, perPage, page)
-		if err := c.rest.DoWithContext(ctx, "GET", path, nil, &reviews); err != nil {
+		err := c.retry(ctx, func() error {
+			reviews = nil
+			return c.rest.DoWithContext(ctx, "GET", path, nil, &reviews)
+		})
+		if err != nil {
 			return false, fmt.Errorf("list reviews: %w", err)
 		}
 		for _, r := range reviews {

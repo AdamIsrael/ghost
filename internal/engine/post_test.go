@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
-	"github.com/AdamIsrael/ghost/internal/agent"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/api"
 
+	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/store"
@@ -27,7 +28,7 @@ func TestPostPending(t *testing.T) {
 	if h.state(1) != store.Posted || h.postCount() != 1 {
 		t.Fatalf("state %s posts %d", h.state(1), h.postCount())
 	}
-	p := h.posts[0]
+	p := h.postAt(0)
 	if p.CommitID != "sha1" || p.Event != "REQUEST_CHANGES" || !strings.HasPrefix(p.Body, "Needs a nil check.") || p.Body != "Needs a nil check.\n"+marker(1) {
 		t.Errorf("post = %+v", p)
 	}
@@ -90,8 +91,8 @@ func TestAutoModePostsImmediately(t *testing.T) {
 	h.start()
 	h.poll("Team", ghPR(1, "sha1"))
 	waitFor(t, "posted", func() bool { return h.state(1) == store.Posted })
-	if h.posts[0].Event != "COMMENT" {
-		t.Errorf("approve verdict must post as COMMENT until M5, got %s", h.posts[0].Event)
+	if h.postAt(0).Event != "COMMENT" {
+		t.Errorf("approve verdict must post as COMMENT until M5, got %s", h.postAt(0).Event)
 	}
 }
 
@@ -235,7 +236,7 @@ func TestPostCustomFooter(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "Needs a nil check.\n\n<sub>claude (m1) · o/r#1 · 0123456</sub>\n" + marker(1)
-	if got := h.posts[0].Body; got != want {
+	if got := h.postAt(0).Body; got != want {
 		t.Errorf("body = %q, want %q", got, want)
 	}
 }
@@ -264,7 +265,7 @@ func TestCommentsOutsideDiffAreListedInBody(t *testing.T) {
 	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil {
 		t.Fatal(err)
 	}
-	p := h.posts[0]
+	p := h.postAt(0)
 	if len(p.Comments) != 1 || p.Comments[0].Line != 3 || len(p.Unattached) != 1 || p.Unattached[0].Line != 50 {
 		t.Fatalf("inline %+v unattached %+v", p.Comments, p.Unattached)
 	}
@@ -282,7 +283,7 @@ func TestAgentCannotForceOutsideDiff(t *testing.T) {
 	h.poll("Team", ghPR(1, "sha1"))
 	h.waitAudit(t, 1, "ready to post")
 	h.e.PostPending(context.Background(), "o/r", 1)
-	if p := h.posts[0]; len(p.Comments) != 1 || len(p.Unattached) != 0 {
+	if p := h.postAt(0); len(p.Comments) != 1 || len(p.Unattached) != 0 {
 		t.Errorf("Ghost's own diff check must decide: inline %d unattached %d", len(p.Comments), len(p.Unattached))
 	}
 }
@@ -293,7 +294,7 @@ func TestUnreadableDiffKeepsCommentsInline(t *testing.T) {
 	h.poll("Team", ghPR(1, "sha1"))
 	h.waitAudit(t, 1, "ready to post")
 	h.e.PostPending(context.Background(), "o/r", 1)
-	if p := h.posts[0]; len(p.Comments) != 1 || len(p.Unattached) != 0 {
+	if p := h.postAt(0); len(p.Comments) != 1 || len(p.Unattached) != 0 {
 		t.Errorf("without a diff, comments stay inline (GitHub decides): inline %d unattached %d", len(p.Comments), len(p.Unattached))
 	}
 }
@@ -335,8 +336,8 @@ func TestTransientPostIsRetried(t *testing.T) {
 	if err := h.e.PostPending(context.Background(), "o/r", 1); err != nil {
 		t.Fatal(err)
 	}
-	if h.state(1) != store.Posted || h.postCount() != 2 || h.hasRevCalls != 1 {
-		t.Errorf("state %s posts %d marker checks %d", h.state(1), h.postCount(), h.hasRevCalls)
+	if h.state(1) != store.Posted || h.postCount() != 2 || h.hasRevCallCount() != 1 {
+		t.Errorf("state %s posts %d marker checks %d", h.state(1), h.postCount(), h.hasRevCallCount())
 	}
 }
 
@@ -379,5 +380,37 @@ func TestClientErrorIsNotRetried(t *testing.T) {
 	h.e.PostPending(context.Background(), "o/r", 1)
 	if h.postCount() != 1 || h.state(1) != store.Ready {
 		t.Errorf("posts %d state %s", h.postCount(), h.state(1))
+	}
+}
+
+func TestTransientPostFoundOnGitHubSaysSo(t *testing.T) {
+	h := transientHarness(t, 1)
+	h.onGH = true
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	h.e.PostPending(context.Background(), "o/r", 1)
+	evs := h.e.PRState("o/r", 1).Audit
+	if msg := evs[len(evs)-1].Message; !strings.Contains(msg, "found on GitHub after a failed response") {
+		t.Errorf("posted audit = %q", msg)
+	}
+}
+
+func TestDiffIsReadBeforeTheAgentRuns(t *testing.T) {
+	h := newHarness(t, nil)
+	h.diff = aGoDiff
+	h.rev.res.Comments = []agent.InlineComment{{Path: "a.go", Line: 3, Body: "x", Severity: "nit"}}
+	h.rev.during = func() { // the agent (somehow) empties the diff file
+		h.mu.Lock()
+		p := h.diffPath
+		h.mu.Unlock()
+		os.WriteFile(p, nil, 0o600)
+	}
+	h.start()
+	h.poll("Team", ghPR(1, "sha1"))
+	h.waitAudit(t, 1, "ready to post")
+	h.e.PostPending(context.Background(), "o/r", 1)
+	if p := h.postAt(0); len(p.Comments) != 1 || len(p.Unattached) != 0 {
+		t.Errorf("the diff read after the agent ran: inline %d unattached %d", len(p.Comments), len(p.Unattached))
 	}
 }

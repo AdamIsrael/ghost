@@ -70,3 +70,46 @@ func TestEmptyDiff(t *testing.T) {
 		t.Error("an empty diff has no commentable lines")
 	}
 }
+
+// Real git shapes: a rename with edits, an octal-escaped name ending in a
+// TAB, and an added line that itself starts with "++ " (shown as "+++ ").
+const tricky = "diff --git a/old.go b/new.go\n" +
+	"similarity index 90%\n" +
+	"rename from old.go\n" +
+	"rename to new.go\n" +
+	"--- a/old.go\n" +
+	"+++ b/new.go\n" +
+	"@@ -1,3 +1,3 @@\n" +
+	" a\n" +
+	"-b\n" +
+	"+++ looks like a header\n" +
+	" c\n" +
+	"@@ -50,2 +50,2 @@ func f() {\n" +
+	" x\n" +
+	"-y\n" +
+	"+z\n" +
+	"\\ No newline at end of file\n" +
+	"diff --git \"a/\\303\\251 tab.txt\" \"b/\\303\\251 tab.txt\"\n" +
+	"--- \"a/\\303\\251 tab.txt\"\t\n" +
+	"+++ \"b/\\303\\251 tab.txt\"\t\n" +
+	"@@ -1 +1 @@\n" +
+	"-old\n" +
+	"+new\n"
+
+func TestTrickyDiffs(t *testing.T) {
+	m := Parse(tricky)
+	for _, tc := range []struct {
+		path string
+		line int
+		want bool
+	}{
+		{"new.go", 2, true}, {"new.go", 51, true}, {"new.go", 10, false},
+		{"old.go", 1, false},
+		{"looks like a header", 50, false}, // the "+++" content line isn't a file header
+		{"é tab.txt", 1, true},
+	} {
+		if got := m.Has(tc.path, tc.line); got != tc.want {
+			t.Errorf("Has(%q, %d) = %v, want %v (map %v)", tc.path, tc.line, got, tc.want, m)
+		}
+	}
+}

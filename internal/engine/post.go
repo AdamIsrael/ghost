@@ -105,7 +105,7 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 			p.Comments = append(p.Comments, rc)
 		}
 	}
-	res, err := e.postWithRetry(ctx, r, p)
+	res, found, err := e.postWithRetry(ctx, r, p)
 	if err != nil {
 		if github.IsClientError(err) {
 			r.State = store.Ready
@@ -120,6 +120,11 @@ func (e *Engine) post(ctx context.Context, r *store.Review) error {
 	}
 	r.State = store.Posted
 	e.save(r)
+	if found {
+		e.audit(r.PRID, r.ID, "posted", "found on GitHub after a failed response; not posted again")
+		e.evaluateApproval(ctx, r, nil)
+		return nil
+	}
 	msg := fmt.Sprintf("%s with %d inline comments", p.Event, len(p.Comments))
 	if n := len(p.Unattached); n > 0 {
 		msg += fmt.Sprintf("; %d outside the diff listed in the body", n)
@@ -181,26 +186,27 @@ func (e *Engine) message(text string, r *store.Review) (string, error) {
 
 // postWithRetry posts p, retrying transient failures (GitHub 5xx, network)
 // after each of e.postRetryDelays. Before each retry it checks GitHub for the
-// review's marker: a failed response may hide a review GitHub did create.
-func (e *Engine) postWithRetry(ctx context.Context, r *store.Review, p github.ReviewPost) (github.PostResult, error) {
-	res, err := e.d.PostReview(ctx, r.Repo, r.Number, p)
+// review's marker: a failed response may hide a review GitHub did create, in
+// which case found is true and nothing is posted again.
+func (e *Engine) postWithRetry(ctx context.Context, r *store.Review, p github.ReviewPost) (res github.PostResult, found bool, err error) {
+	res, err = e.d.PostReview(ctx, r.Repo, r.Number, p)
 	for _, d := range e.postRetryDelays {
 		if err == nil || !github.Transient(err) || e.d.HasReview == nil {
-			return res, err
+			return res, false, err
 		}
 		select {
 		case <-ctx.Done():
-			return res, err
+			return res, false, err
 		case <-time.After(d):
 		}
-		found, herr := e.d.HasReview(ctx, r.Repo, r.Number, marker(r.ID))
+		ok, herr := e.d.HasReview(ctx, r.Repo, r.Number, marker(r.ID))
 		if herr != nil {
-			return res, err // can't tell; leave it post-unknown
+			return res, false, err // can't tell; leave it post-unknown
 		}
-		if found {
-			return github.PostResult{}, nil
+		if ok {
+			return github.PostResult{}, true, nil
 		}
 		res, err = e.d.PostReview(ctx, r.Repo, r.Number, p)
 	}
-	return res, err
+	return res, false, err
 }

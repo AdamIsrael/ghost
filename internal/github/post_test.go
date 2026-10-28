@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
@@ -230,7 +231,7 @@ func TestUnattachedCommentsGoInTheBodyUpFront(t *testing.T) {
 	if len(body.Comments) != 1 || body.Comments[0].Path != "a.go" {
 		t.Errorf("inline comments = %+v; the in-diff one should stay inline", body.Comments)
 	}
-	if !strings.Contains(body.Body, "outside the lines this PR changes") || !strings.Contains(body.Body, "`b.go:99` **Nit:** outside the diff") {
+	if !strings.Contains(body.Body, "not part of this PR's diff") || !strings.Contains(body.Body, "`b.go:99` **Nit:** outside the diff") {
 		t.Errorf("body = %q", body.Body)
 	}
 	if strings.Contains(string(f.calls[0].raw), "Unattached") || strings.Contains(string(f.calls[0].raw), "unattached") {
@@ -248,5 +249,35 @@ func TestFoldRecordsGitHubsReason(t *testing.T) {
 	}
 	if body := f.calls[1].body.Body; !strings.Contains(body, "GitHub could not attach these to the diff: Pull request review thread line must be part of the diff") {
 		t.Errorf("body = %q", body)
+	}
+}
+
+func TestReasonIsOneTidyLine(t *testing.T) {
+	long := strings.Repeat("x", 500)
+	h := &api.HTTPError{StatusCode: 422, Message: "Validation Failed\nReview.body is invalid\n" + long}
+	got := reason(h)
+	if strings.ContainsAny(got, "\n\r") || len(got) > 300 || !strings.HasPrefix(got, "Validation Failed Review.body is invalid") {
+		t.Errorf("reason = %q (len %d)", got, len(got))
+	}
+}
+
+func TestFoldListIsCapped(t *testing.T) {
+	var cs []ReviewComment
+	for i := 0; i < 500; i++ {
+		cs = append(cs, ReviewComment{Path: "a.go", Line: i + 1, Body: strings.Repeat("y", 300)})
+	}
+	out := foldComments(cs, "why")
+	if len(out) > 40000 || !strings.Contains(out, "more not shown") {
+		t.Errorf("fold block %d chars; want it capped with a 'more not shown' line", len(out))
+	}
+}
+
+func TestHasReviewRetriesTransientErrors(t *testing.T) {
+	f := &fakeREST{errs: []error{&api.HTTPError{StatusCode: 502}}, getBody: `[{"body":"x <!-- ghost-review-id:9 -->"}]`}
+	c := New(nil).WithREST(f)
+	c.retryDelays = []time.Duration{0, 0}
+	found, err := c.HasReview(context.Background(), "o/r", 7, "<!-- ghost-review-id:9 -->")
+	if err != nil || !found || len(f.calls) != 2 {
+		t.Errorf("found %v err %v calls %d", found, err, len(f.calls))
 	}
 }

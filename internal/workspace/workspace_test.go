@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,5 +238,43 @@ func TestConcurrentCheckoutsAcrossManagers(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "repos", "o", "r.lock")); err != nil {
 		t.Errorf("lock file missing: %v", err)
+	}
+}
+
+// The diff decides which comments GitHub will accept inline, so it must match
+// GitHub's PR diff whatever the operator's own git config says.
+func TestReviewDiffIgnoresPersonalGitConfig(t *testing.T) {
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	os.WriteFile(global, []byte("[diff]\n\tcontext = 0\n\tnoprefix = true\n\trenames = false\n\talgorithm = patience\n\tinterHunkContext = 10\n"), 0o644)
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+
+	dir := t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main")
+	git(t, dir, "config", "user.email", "t@example.com")
+	git(t, dir, "config", "user.name", "t")
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "base")
+	git(t, dir, "checkout", "-q", "-b", "feat")
+	lines[9] = "line ten"
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	git(t, dir, "commit", "-q", "-am", "change")
+	head := git(t, dir, "rev-parse", "HEAD")
+	git(t, dir, "update-ref", "refs/pull/7/head", head)
+	git(t, dir, "checkout", "-q", "main")
+
+	var clones int32
+	ws, cleanup, err := New(t.TempDir(), fakeGh(dir, &clones)).Checkout(context.Background(), "o/r", 7, "main", head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	diff, _ := os.ReadFile(ws.DiffPath)
+	if !strings.Contains(string(diff), "+++ b/a.txt") || !strings.Contains(string(diff), "@@ -7,7 +7,7 @@") {
+		t.Errorf("diff follows personal git config (want a/ b/ prefixes and 3 lines of context):\n%s", diff)
 	}
 }
