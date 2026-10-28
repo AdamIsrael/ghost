@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
@@ -266,8 +267,8 @@ func TestFoldListIsCapped(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		cs = append(cs, ReviewComment{Path: "a.go", Line: i + 1, Body: strings.Repeat("y", 300)})
 	}
-	out := foldComments(cs, "why")
-	if len(out) > 40000 || !strings.Contains(out, "more not shown") {
+	out := foldComments(cs, "why", maxBody)
+	if len(out) > maxBody || !strings.Contains(out, "more not shown") {
 		t.Errorf("fold block %d chars; want it capped with a 'more not shown' line", len(out))
 	}
 }
@@ -279,5 +280,32 @@ func TestHasReviewRetriesTransientErrors(t *testing.T) {
 	found, err := c.HasReview(context.Background(), "o/r", 7, "<!-- ghost-review-id:9 -->")
 	if err != nil || !found || len(f.calls) != 2 {
 		t.Errorf("found %v err %v calls %d", found, err, len(f.calls))
+	}
+}
+
+func TestReasonCutsAtACharacter(t *testing.T) {
+	h := &api.HTTPError{StatusCode: 422, Message: strings.Repeat("é", 300)}
+	if got := reason(h); !utf8.ValidString(got) {
+		t.Errorf("reason split a character: %q", got)
+	}
+}
+
+func TestBodyStaysUnderGitHubsLimit(t *testing.T) {
+	var many []ReviewComment
+	for i := 0; i < 400; i++ {
+		many = append(many, ReviewComment{Path: "a.go", Line: i + 1, Body: strings.Repeat("z", 300)})
+	}
+	f := &fakeREST{errs: []error{err422}} // GitHub rejects the inline ones: both lists end up in the body
+	p := ReviewPost{CommitID: "abc", Event: "COMMENT", Body: strings.Repeat("s", 10000), Comments: many, Unattached: many}
+	if _, err := New(nil).WithREST(f).PostReview(context.Background(), "o/r", 7, p); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range f.calls {
+		if n := utf8.RuneCountInString(c.body.Body); n > 65536 {
+			t.Errorf("call %d: body %d characters, over GitHub's 65,536", i, n)
+		}
+	}
+	if last := f.calls[len(f.calls)-1].body.Body; !strings.Contains(last, "more not shown") {
+		t.Error("the trimmed lists should say how many comments were left out")
 	}
 }

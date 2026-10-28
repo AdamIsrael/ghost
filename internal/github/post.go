@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
@@ -59,7 +60,7 @@ func (c *Client) PostReview(ctx context.Context, repo string, number int, p Revi
 		}
 	}
 	if len(p.Unattached) > 0 {
-		p.Body += foldComments(p.Unattached, "not part of this PR's diff, so GitHub can't attach them")
+		p.Body += foldComments(p.Unattached, "not part of this PR's diff, so GitHub can't attach them", maxBody-len(p.Body))
 		p.Unattached = nil
 	}
 	var res PostResult
@@ -75,7 +76,7 @@ func (c *Client) PostReview(ctx context.Context, repo string, number int, p Revi
 		if res.FoldReason != "" {
 			why += ": " + res.FoldReason
 		}
-		p.Body += foldComments(p.Comments, why)
+		p.Body += foldComments(p.Comments, why, maxBody-len(p.Body))
 		p.Comments = nil
 		res.Folded = true
 		err = c.post(ctx, path, p)
@@ -138,24 +139,33 @@ func reason(err error) string {
 	// One line, bounded: it goes into a markdown heading and the audit trail.
 	text = strings.Join(strings.Fields(text), " ")
 	if len(text) > maxReason {
-		text = text[:maxReason] + "…"
+		n := maxReason
+		for n > 0 && !utf8.RuneStart(text[n]) {
+			n-- // don't split a multi-byte character
+		}
+		text = text[:n] + "…"
 	}
 	return text
 }
 
 const (
 	maxReason = 200
-	// maxFolded bounds the comment list put into a review body, keeping it
-	// well under GitHub's 65,536-character limit.
-	maxFolded = 30000
+	// maxBody is the review body length Ghost stays under when it lists
+	// comments in the body: GitHub rejects bodies over 65,536 characters.
+	// Measured in bytes, which is never fewer than characters.
+	maxBody = 60000
 )
 
-func foldComments(cs []ReviewComment, why string) string {
+// foldComments lists comments for the review body, using at most room bytes
+// (the rest of the body's budget); comments that don't fit are counted in a
+// final "…and N more" line.
+func foldComments(cs []ReviewComment, why string, room int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n\n**Inline comments** (%s):\n", why)
+	const moreLine = 80 // room kept for the "…and N more" line
 	for i, c := range cs {
 		line := fmt.Sprintf("- `%s:%d` %s\n", c.Path, c.Line, strings.ReplaceAll(c.Body, "\n", " "))
-		if b.Len()+len(line) > maxFolded {
+		if b.Len()+len(line)+moreLine > room {
 			fmt.Fprintf(&b, "- …and %d more not shown (GitHub limits a review's length)\n", len(cs)-i)
 			break
 		}
