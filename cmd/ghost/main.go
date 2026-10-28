@@ -210,6 +210,23 @@ func oneOffView(pr github.PR, once *oneOff, views []config.View) config.View {
 	return config.View{Name: name, PR: fmt.Sprintf("%s#%d", repo, once.number), Source: "session"}
 }
 
+// checkSessionNames refuses a saved view named like the ghost review tab:
+// views are keyed by name, so two with one name would share results.
+func checkSessionNames(views []config.View) error {
+	session := map[string]bool{}
+	for _, v := range views {
+		if v.Source == "session" {
+			session[v.Name] = true
+		}
+	}
+	for _, v := range views {
+		if v.Source != "session" && session[v.Name] {
+			return fmt.Errorf("the name %q is in use by the ghost review tab; pick another", v.Name)
+		}
+	}
+	return nil
+}
+
 // startGhost runs the TUI with the engine and poller. once, if set, adds a
 // tab for that PR and starts reviewing it (ghost review <pr>).
 func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *oneOff) int {
@@ -236,7 +253,7 @@ func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *
 	st, err := store.Open(dbPath)
 	if err != nil {
 		if once != nil && errors.Is(err, store.ErrLocked) {
-			fmt.Fprintf(stderr, "ghost: %v\nGhost is already open: switch to it and press r on %s#%d there.\n", err, once.repo, once.number)
+			fmt.Fprintf(stderr, "ghost: Ghost is already open with %s: switch to it and press r on %s#%d there.\n", dbPath, once.repo, once.number)
 			return 1
 		}
 		fmt.Fprintln(stderr, "ghost:", err)
@@ -268,6 +285,26 @@ func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *
 		Log:             logger,
 		MaxPRsPerView:   cfg.MaxPRsPerView,
 	}
+	views := cfg.Views
+	var oncePR github.PR
+	if once != nil {
+		// Fetch the PR before the engine starts: a bad link must fail here,
+		// before any queued work is picked up (and then interrupted).
+		pctx, pcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		pr, err := d.getPR(pctx, once.repo, once.number)
+		pcancel()
+		if err != nil {
+			fmt.Fprintln(stderr, "ghost:", err)
+			return 1
+		}
+		oncePR = pr.PR
+		tab := oneOffView(oncePR, once, views)
+		views = append(append([]config.View(nil), views...), tab)
+		opts.Views, opts.ActiveView = views, tab.Name
+		if st := oncePR.State; st != "" && st != "OPEN" {
+			opts.Flash = fmt.Sprintf("note: %s is %s; reviewing it anyway", tab.PR, strings.ToLower(st))
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	eng := engine.New(cfg, engine.Deps{
@@ -275,6 +312,7 @@ func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *
 		PostReview: d.postReview, HasReview: d.hasReview, Approve: d.approve, Log: logger,
 		AddLabel: d.addLabel,
 	})
+	eng.SetViews(views)
 	engineDone := make(chan struct{})
 	go func() { eng.Run(ctx); close(engineDone) }()
 	// On return: stop the engine and give in-flight work a moment to record
@@ -287,21 +325,10 @@ func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *
 		}
 	}()
 	opts.Engine = eng
-	views := cfg.Views
 	if once != nil {
-		// Fetch the PR first: a bad link fails here, before the TUI opens.
-		pctx, pcancel := context.WithTimeout(ctx, 30*time.Second)
-		pr, err := d.getPR(pctx, once.repo, once.number)
-		pcancel()
-		if err != nil {
-			fmt.Fprintln(stderr, "ghost:", err)
-			return 1
-		}
-		tab := oneOffView(pr.PR, once, views)
-		views = append(append([]config.View(nil), views...), tab)
-		opts.Views, opts.ActiveView = views, tab.Name
-		if err := eng.ReviewNow(pr.PR, once.agent); err != nil {
-			logger.Warn("review not started", "pr", tab.PR, "err", err)
+		if err := eng.ReviewNow(oncePR, once.agent); err != nil {
+			logger.Warn("review not started", "pr", fmt.Sprintf("%s#%d", oncePR.Repo, oncePR.Number), "err", err)
+			opts.Flash = "review not started: " + err.Error()
 		}
 	}
 	var p *poller.Poller
@@ -319,6 +346,9 @@ func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *
 	sort.Strings(opts.Agents)
 	viewsPath := config.ViewsPath(cfgPath)
 	opts.SaveViews = func(views []config.View) error {
+		if err := checkSessionNames(views); err != nil {
+			return err
+		}
 		// The one-off ghost review tab lives in the TUI only: never
 		// validated as a search or written to views.toml.
 		var saved []config.View

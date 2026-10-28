@@ -243,3 +243,10 @@ func TestSessionViewCantBeEditedOrDeleted(t *testing.T) {
 		t.Errorf("SaveViews called %d times", saved)
 	}
 }
+
+func TestStartupFlashIsShown(t *testing.T) {
+	m := send(t, New(Options{Views: twoViews, Flash: "review not started: database is locked"}), tea.WindowSizeMsg{Width: 160, Height: 10})
+	if out := screen(m); !strings.Contains(out, "review not started") {
+		t.Errorf("startup flash missing:\n%s", out)
+	}
+}

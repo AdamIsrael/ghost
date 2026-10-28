@@ -40,6 +40,7 @@ type Options struct {
 	MaxPRsPerView   int                       // max_prs_per_view: the view form's default
 	Log             *slog.Logger              // receives errors in full; nil = discard
 	ActiveView      string                    // view to start on (e.g. ghost review's one-off tab)
+	Flash           string                    // message to show at startup
 }
 
 // Engine is what the TUI needs from the review engine.
@@ -121,6 +122,7 @@ func New(o Options) Model {
 			m.active = i
 		}
 	}
+	m.flash = o.Flash
 	return m
 }
 

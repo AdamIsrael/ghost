@@ -225,7 +225,57 @@ func TestReviewWhileGhostRunsSaysWhatToDo(t *testing.T) {
 	if code := run([]string{"--config", h.cfg, "--db", db, "review", "o/r#7"}, &out, &errb, d); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
-	if msg := errb.String(); !strings.Contains(msg, "already running") || !strings.Contains(msg, "press r") {
+	if msg := errb.String(); !strings.Contains(msg, "already open") || !strings.Contains(msg, "press r") {
 		t.Errorf("stderr = %q", msg)
+	}
+}
+
+func TestBadPRFailsBeforeTheEngineRuns(t *testing.T) {
+	h, d := newReviewHarness(t, "")
+	db := filepath.Join(t.TempDir(), "ghost.db")
+	// An earlier session left a review queued.
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prID, _ := st.UpsertPR(github.PR{Repo: "o/other", Number: 1, HeadSHA: "abc"})
+	st.EnqueueReview(prID, "abc", "claude", false)
+	st.Close()
+
+	d.getPR = func(context.Context, string, int) (github.PRDetail, error) {
+		return github.PRDetail{}, errors.New("o/r#9999 not found")
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"--config", h.cfg, "--db", db, "review", "o/r#9999"}, &out, &errb, d); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if h.checkedOut {
+		t.Error("a bad PR must fail before the engine picks up queued work")
+	}
+	st, _ = store.Open(db)
+	defer st.Close()
+	if r, _ := st.LatestReview("o/other", 1); r == nil || r.State != store.Queued {
+		t.Errorf("the earlier queued review was touched: %+v", r)
+	}
+}
+
+func TestOneOffTabNameIsUnique(t *testing.T) {
+	views := []config.View{{Name: "my-repo#7"}, {Name: "my-repo#7 (review)"}}
+	v := oneOffView(github.PR{Repo: "O/my-repo"}, &oneOff{repo: "o/my-repo", number: 7}, views)
+	if v.Name != "my-repo#7 (review) (review)" || v.PR != "O/my-repo#7" || v.Source != "session" {
+		t.Errorf("view = %+v", v)
+	}
+}
+
+func TestSavedViewCantTakeTheSessionTabsName(t *testing.T) {
+	views := []config.View{
+		{Name: "my-repo#7", PR: "o/my-repo#7", Source: "session"},
+		{Name: "my-repo#7", Query: "is:pr", Source: "views.toml"},
+	}
+	if err := checkSessionNames(views); err == nil || !strings.Contains(err.Error(), "ghost review tab") {
+		t.Errorf("err = %v", err)
+	}
+	if err := checkSessionNames(views[:1]); err != nil {
+		t.Errorf("no clash: %v", err)
 	}
 }
