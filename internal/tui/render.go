@@ -275,6 +275,14 @@ func (sty styles) reviewLines(st engine.PRState, prHead string, width int) []str
 			cleanLine(r.HeadSHA), cleanLine(prHead))))
 	}
 	switch r.State {
+	case store.Queued:
+		if st.Waiting != "" {
+			ls = append(ls, "", sty.warning.Render("── Queued, waiting: "+cleanLine(st.Waiting)+" ──"))
+		} else {
+			ls = append(ls, "", sty.heading.Render("── Queued; starting… ──"))
+		}
+	case store.Running:
+		ls = append(ls, "", sty.heading.Render("── Reviewing… ──"))
 	case store.Ready:
 		ls = append(ls, "", sty.special.Bold(true).Render(fmt.Sprintf("── Pending review: %s, $%.2f (press P to post) ──", cleanLine(r.Verdict), r.CostUSD)))
 		ls = append(ls, strings.Split(ansi.Wordwrap(clean(r.Summary), width, " "), "\n")...)

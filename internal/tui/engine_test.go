@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -246,5 +247,39 @@ func TestStaleReviewWarning(t *testing.T) {
 	fe.state.Latest.HeadSHA = "abc1234def"
 	if out := screen(withEngine(t, fe)); strings.Contains(out, "new commits") {
 		t.Error("no warning when the review matches the head")
+	}
+}
+
+// GitHub #9: r confirms the review was queued, and says why it's waiting.
+func TestReviewKeyConfirmsQueued(t *testing.T) {
+	fe := &fakeEngine{}
+	m := withEngine(t, fe)
+	m, cmd := m.Update(key("r"))
+	m = runCmd(m, cmd)
+	ref := fmt.Sprintf("%s#%d", fe.rereview[0].Repo, fe.rereview[0].Number)
+	if out := screen(m); !strings.Contains(out, "review queued for "+ref) || strings.Contains(out, "waiting:") {
+		t.Errorf("no plain queued confirmation:\n%s", out)
+	}
+
+	fe.state = engine.PRState{Latest: &store.Review{State: store.Queued}, Waiting: "Ghost is paused (press p to resume)"}
+	m, cmd = m.Update(key("r"))
+	m = runCmd(m, cmd)
+	if out := screen(m); !strings.Contains(out, "review queued for "+ref+"; waiting: Ghost is paused") {
+		t.Errorf("flash doesn't say why it's waiting:\n%s", out)
+	}
+}
+
+func TestDetailShowsQueuedAndRunning(t *testing.T) {
+	for _, tc := range []struct {
+		state engine.PRState
+		want  string
+	}{
+		{engine.PRState{Latest: &store.Review{State: store.Queued}, Waiting: "Ghost is paused (press p to resume)"}, "Queued, waiting: Ghost is paused"},
+		{engine.PRState{Latest: &store.Review{State: store.Queued}}, "Queued; starting…"},
+		{engine.PRState{Latest: &store.Review{State: store.Running}}, "Reviewing…"},
+	} {
+		if out := screen(withEngine(t, &fakeEngine{state: tc.state})); !strings.Contains(out, tc.want) {
+			t.Errorf("missing %q:\n%s", tc.want, out)
+		}
 	}
 }

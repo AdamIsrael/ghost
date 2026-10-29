@@ -84,7 +84,7 @@ Every step is recorded in the PR's audit trail, shown in the detail pane.
 | `←` `→` / `h` `l` / `tab` | Switch view |
 | `↑` `↓` / `j` `k` | Move through PRs |
 | `o` / `enter` | Open the PR in your browser |
-| `r` | Review the selected PR again |
+| `r` | Review the selected PR now, even if its CI is red or pending. Ghost confirms it's queued, and if it can't start yet (paused, daily budget reached, or `max_concurrent_reviews` busy) it says why |
 | `P` | Post the selected PR's pending review |
 | `a` | Approve the selected PR (when an approval is pending) |
 | `p` | Pause or resume starting new reviews |

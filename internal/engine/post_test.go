@@ -452,3 +452,66 @@ func TestReviewNowRejectsUnknownAgent(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// GitHub #9: a queued review says why it hasn't started.
+func TestQueuedReviewSaysWhyItWaits(t *testing.T) {
+	waiting := func(h *harness, n int) string { return h.e.PRState("o/r", n).Waiting }
+
+	t.Run("paused", func(t *testing.T) {
+		h := newHarness(t, nil)
+		h.start()
+		h.e.TogglePause()
+		h.poll("Watch", ghPR(1, "sha1"))
+		if err := h.e.Rereview(ghPR(1, "sha1")); err != nil {
+			t.Fatal(err)
+		}
+		if w := waiting(h, 1); !strings.Contains(w, "paused") || !strings.Contains(w, "press p") {
+			t.Errorf("waiting = %q, want the pause and how to resume", w)
+		}
+		h.e.TogglePause()
+		waitFor(t, "ready", func() bool { return h.state(1) == store.Ready })
+		if w := waiting(h, 1); w != "" {
+			t.Errorf("finished review still waiting: %q", w)
+		}
+	})
+
+	t.Run("budget", func(t *testing.T) {
+		h := newHarness(t, func(c *config.Config) { c.MaxDailyCostUSD, c.MaxCostPerReviewUSD = 1, 1.5 })
+		h.start()
+		if err := h.e.Rereview(ghPR(1, "sha1")); err != nil {
+			t.Fatal(err)
+		}
+		if w := waiting(h, 1); !strings.Contains(w, "budget") || !strings.Contains(w, "$1.00") {
+			t.Errorf("waiting = %q, want the budget", w)
+		}
+	})
+
+	t.Run("slots", func(t *testing.T) {
+		h := newHarness(t, func(c *config.Config) { c.MaxConcurrentReviews = 1 })
+		h.rev.release = make(chan struct{})
+		h.start()
+		h.poll("Watch", ghPR(1, "sha1"), ghPR(2, "sha2"))
+		if err := h.e.Rereview(ghPR(1, "sha1")); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "first review running", func() bool { return h.rev.count() == 1 })
+		if err := h.e.Rereview(ghPR(2, "sha2")); err != nil {
+			t.Fatal(err)
+		}
+		if w := waiting(h, 2); !strings.Contains(w, "max_concurrent_reviews") {
+			t.Errorf("waiting = %q, want the concurrency limit", w)
+		}
+		close(h.rev.release)
+		waitFor(t, "both ready", func() bool { return h.state(1) == store.Ready && h.state(2) == store.Ready })
+	})
+
+	t.Run("free", func(t *testing.T) {
+		h := newHarness(t, nil) // not started, so nothing claims it
+		if err := h.e.Rereview(ghPR(1, "sha1")); err != nil {
+			t.Fatal(err)
+		}
+		if w := waiting(h, 1); w != "" {
+			t.Errorf("waiting = %q, want none when a worker can take it", w)
+		}
+	})
+}

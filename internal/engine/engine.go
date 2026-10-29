@@ -49,6 +49,7 @@ type PRState struct {
 	Audit    []store.AuditEvent
 	Latest   *store.Review
 	Comments []agent.InlineComment // Latest's comments, decoded
+	Waiting  string                // why Latest, if queued, hasn't started; "" = it starts as soon as a worker takes it
 }
 
 // tick re-checks the queue (budget may have reset at midnight).
@@ -299,7 +300,7 @@ func (e *Engine) claim() *store.Review {
 	if err != nil {
 		return nil
 	}
-	if spend+float64(e.running+1)*e.cfg.MaxCostPerReviewUSD > e.cfg.MaxDailyCostUSD {
+	if e.overBudget(spend) {
 		return nil
 	}
 	r, err := e.d.Store.ClaimNext()
@@ -492,8 +493,7 @@ func (e *Engine) Snapshot() Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// Computed live (same test as claim) so the flag can never go stale.
-	budget := !e.paused && queued > 0 &&
-		spend+float64(e.running+1)*e.cfg.MaxCostPerReviewUSD > e.cfg.MaxDailyCostUSD
+	budget := !e.paused && queued > 0 && e.overBudget(spend)
 	return Snapshot{
 		SpendTodayUSD: spend, MaxDailyUSD: e.cfg.MaxDailyCostUSD,
 		Running: e.running, Queued: queued, Paused: e.paused, BudgetPaused: budget,
@@ -507,6 +507,9 @@ func (e *Engine) PRState(repo string, number int) PRState {
 	st.Latest, _ = e.d.Store.LatestReview(repo, number)
 	if st.Latest != nil {
 		_ = json.Unmarshal([]byte(st.Latest.Comments), &st.Comments)
+		if st.Latest.State == store.Queued {
+			st.Waiting = e.waitReason()
+		}
 	}
 	return st
 }
@@ -530,4 +533,28 @@ func (e *Engine) op(ctx context.Context) (context.Context, func(), error) {
 		cancel()
 		e.wg.Done()
 	}, nil
+}
+
+// overBudget reports whether one more review at the per-review cap would
+// pass today's budget, given spend so far. The caller holds e.mu.
+func (e *Engine) overBudget(spend float64) bool {
+	return spend+float64(e.running+1)*e.cfg.MaxCostPerReviewUSD > e.cfg.MaxDailyCostUSD
+}
+
+// waitReason says why a queued review can't start now, using the same tests
+// as claim; "" means a worker will take it right away.
+func (e *Engine) waitReason() string {
+	spend, err := e.d.Store.SpendSince(startOfDay(e.d.Now()))
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	switch {
+	case e.paused:
+		return "Ghost is paused (press p to resume)"
+	case err == nil && e.overBudget(spend):
+		return fmt.Sprintf("today's budget is reached ($%.2f of $%.2f spent; a review can cost up to $%.2f)",
+			spend, e.cfg.MaxDailyCostUSD, e.cfg.MaxCostPerReviewUSD)
+	case e.running >= e.cfg.MaxConcurrentReviews:
+		return fmt.Sprintf("the max_concurrent_reviews limit (%d) is reached", e.cfg.MaxConcurrentReviews)
+	}
+	return ""
 }

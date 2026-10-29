@@ -89,6 +89,7 @@ type engineDoneMsg struct {
 	what string
 	pr   string // owner/repo#N the action was on
 	err  error
+	ok   string // flash on success; "" clears it
 }
 
 func waitForChange(e Engine) tea.Cmd {
@@ -263,7 +264,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case changeMsg:
 		return m, waitForChange(m.opts.Engine)
 	case engineDoneMsg:
-		m.flash = ""
+		m.flash = msg.ok
 		if msg.err != nil {
 			m.opts.Log.Error(msg.what+" failed", "pr", msg.pr, "err", msg.err)
 			m.flash = msg.err.Error()
@@ -342,7 +343,16 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 		}
 		e, p := m.opts.Engine, *pr
 		ref := fmt.Sprintf("%s#%d", p.Repo, p.Number)
-		return m, func() tea.Msg { return engineDoneMsg{"re-review", ref, e.Rereview(p)} }
+		return m, func() tea.Msg {
+			if err := e.Rereview(p); err != nil {
+				return engineDoneMsg{what: "re-review", pr: ref, err: err}
+			}
+			ok := "review queued for " + ref
+			if w := e.PRState(p.Repo, p.Number).Waiting; w != "" {
+				ok += "; waiting: " + w
+			}
+			return engineDoneMsg{what: "re-review", pr: ref, ok: ok}
+		}
 	case "P":
 		pr := m.selectedPR()
 		if pr == nil || m.opts.Engine == nil {
@@ -350,7 +360,7 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 		}
 		e, repo, n := m.opts.Engine, pr.Repo, pr.Number
 		return m, func() tea.Msg {
-			return engineDoneMsg{"post", fmt.Sprintf("%s#%d", repo, n), e.PostPending(context.Background(), repo, n)}
+			return engineDoneMsg{what: "post", pr: fmt.Sprintf("%s#%d", repo, n), err: e.PostPending(context.Background(), repo, n)}
 		}
 	case "p":
 		if m.opts.Engine != nil {
@@ -363,7 +373,7 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 		}
 		e, repo, n := m.opts.Engine, pr.Repo, pr.Number
 		return m, func() tea.Msg {
-			return engineDoneMsg{"approve", fmt.Sprintf("%s#%d", repo, n), e.Approve(context.Background(), repo, n)}
+			return engineDoneMsg{what: "approve", pr: fmt.Sprintf("%s#%d", repo, n), err: e.Approve(context.Background(), repo, n)}
 		}
 	case "t":
 		if m.opts.NoColor {
