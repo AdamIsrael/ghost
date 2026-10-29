@@ -4,15 +4,7 @@
 
 Ghost is a terminal UI that watches GitHub pull requests and reviews them with an AI agent. It polls the PR searches you define, shows each PR's status, runs reviews with [Claude Code](https://docs.claude.com/en/docs/claude-code), and posts the review comments (and, if you allow it, approvals) back to GitHub, all within a daily budget you set.
 
-```
- Views:  Team (3)   Mine (12)   ←/→ switch · n new · e edit · d delete · …
- ● Ready             o/r#42 Add retries    │ o/r#42  Add retries
- ◐ Waiting on CI     o/r#40 Bump deps      │ by @octocat  +120 −30  4 files
- ✗ CI failing        o/r#38 Fix parser     │ Status: ● Ready   CI: ✓ passing
- ✓ Approved          o/r#37 Update docs    │ ── Audit trail ──
-                                           │ 10:02 reviewed — approve, 1 comments, $0.40
- Spend today $3.12 / $10.00 · Reviews 1 running · 2 queued · Last poll 10:04
-```
+![Ghost in the Tokyo Night theme: a list of PRs with their status on the left, and the selected PR's audit trail and pending review on the right](docs/screenshots/tokyo-night.svg)
 
 ## Requirements
 
@@ -232,6 +224,11 @@ Set `theme` in `config.toml`, or press `t` to try them live. The status bar tell
 
 Built-ins: `dark`, `light`, `high-contrast`, `mono`, `tokyo-night`, `tokyo-night-storm`, `tokyo-night-day`, `catppuccin-mocha`, `catppuccin-latte`, `dracula`, `nord`, `gruvbox-dark`, `solarized-dark` and `solarized-light`.
 
+<p>
+<img src="docs/screenshots/tokyo-night-day.svg" width="49%" alt="Ghost in the Tokyo Night Day theme">
+<img src="docs/screenshots/catppuccin-mocha.svg" width="49%" alt="Ghost in the Catppuccin Mocha theme">
+</p>
+
 - `auto` picks `dark` or `light` from your terminal's background. Until the terminal answers, it uses neutral colors that read on either.
 - `NO_COLOR=1` turns colors off.
 - Every built-in meets a contrast check: text and hints at 4.5:1, status colors at 3:1.
@@ -312,6 +309,8 @@ go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 ```
 
 CI runs these (plus a `gofmt` check) on Linux and macOS for every push and pull request. Pushing a tag like `v0.1.0` builds release binaries with [GoReleaser](https://goreleaser.com) and publishes them on the releases page; `goreleaser release --snapshot --clean` does a local dry run into `dist/`.
+
+`scripts/screenshot.sh` regenerates the screenshots in [`docs/screenshots/`](docs/screenshots) from the real TUI with made-up data; it needs [freeze](https://github.com/charmbracelet/freeze) (`go install github.com/charmbracelet/freeze@v0.2.2`).
 
 The design docs and implementation plans are in [`docs/superpowers/`](docs/superpowers). Work is tracked with [beads](https://github.com/gastownhall/beads) (`bd ready`).
 
