@@ -89,10 +89,7 @@ func TestApprovalWaitsForCIThenApprovesOnPoll(t *testing.T) {
 	h.mu.Lock()
 	h.ci[1] = "SUCCESS"
 	h.mu.Unlock()
-	green := ghPR(1, "sha1")
-	green.CIState = "SUCCESS"
-	h.e.HandlePoll(poller.Result{View: "Watch", PRs: []github.PR{green}, At: time.Now()})
-	waitFor(t, "approved after CI", func() bool { return h.approval(1) == store.ApprovalApproved })
+	greenPollUntil(t, h, 1, "approved after CI", func() bool { return h.approval(1) == store.ApprovalApproved })
 }
 
 func TestNotEligibleWithBlockingComment(t *testing.T) {
@@ -280,6 +277,30 @@ func greenPoll(h *harness, n int) {
 	h.e.HandlePoll(poller.Result{View: "Watch", PRs: []github.PR{pr}, At: time.Now()})
 }
 
+// waitRecheckIdle waits until no approval recheck is running.
+func waitRecheckIdle(t *testing.T, h *harness) {
+	t.Helper()
+	waitFor(t, "recheck idle", func() bool {
+		if h.e.recheckMu.TryLock() {
+			h.e.recheckMu.Unlock()
+			return true
+		}
+		return false
+	})
+}
+
+// greenPollUntil re-sends a green poll until cond holds. Approval rechecks
+// run off the engine loop one at a time; a poll that arrives while one is
+// still running is skipped by design (the next poll carries the same PRs),
+// so a single poll can be lost.
+func greenPollUntil(t *testing.T, h *harness, n int, what string, cond func() bool) {
+	t.Helper()
+	waitFor(t, what, func() bool {
+		greenPoll(h, n)
+		return cond()
+	})
+}
+
 func TestAutoModeRetriesUnknownApprovalOnPoll(t *testing.T) {
 	h := approvingHarness(t, func(c *config.Config) { c.AutoApprove.RequireConfirm = false })
 	h.approveFn = func() error { return errors.New("connection reset") }
@@ -294,8 +315,7 @@ func TestAutoModeRetriesUnknownApprovalOnPoll(t *testing.T) {
 		t.Fatal("unknown approval retried before a poll interval passed")
 	}
 	h.advance(6 * time.Minute)
-	greenPoll(h, 1)
-	waitFor(t, "approved on poll", func() bool { return h.approval(1) == store.ApprovalApproved })
+	greenPollUntil(t, h, 1, "approved on poll", func() bool { return h.approval(1) == store.ApprovalApproved })
 	if h.approveCount() != 2 {
 		t.Errorf("approvals = %d (marker not on GitHub, so one retry)", h.approveCount())
 	}
@@ -308,19 +328,19 @@ func TestAutoModeGetPRFailureReleasesToWaiting(t *testing.T) {
 	h.mu.Lock()
 	h.getPRErr = errors.New("HTTP 502")
 	h.mu.Unlock()
-	greenPoll(h, 1) // eligible on poll data, but approve() can't read the PR
-	waitFor(t, "approve attempted", func() bool {
+	// eligible on poll data, but approve() can't read the PR
+	greenPollUntil(t, h, 1, "approve attempted", func() bool {
 		r, _ := h.st.LatestReview("o/r", 1)
 		return strings.Contains(r.ApprovalNote, "502")
 	})
+	waitRecheckIdle(t, h) // a re-sent poll may still be rechecking
 	if h.approval(1) != store.ApprovalWaiting {
 		t.Fatalf("auto mode must fall back to waiting, got %q", h.approval(1))
 	}
 	h.mu.Lock()
 	h.getPRErr, h.ci[1] = nil, "SUCCESS"
 	h.mu.Unlock()
-	greenPoll(h, 1)
-	waitFor(t, "approved after recovery", func() bool { return h.approval(1) == store.ApprovalApproved })
+	greenPollUntil(t, h, 1, "approved after recovery", func() bool { return h.approval(1) == store.ApprovalApproved })
 }
 
 func TestUnknownNotRetriedWithoutHasReview(t *testing.T) {
@@ -347,8 +367,7 @@ func TestRecheckDoesNotBlockPolls(t *testing.T) {
 	h.ci[1] = "SUCCESS"
 	h.approveFn = func() error { <-release; return nil }
 	h.mu.Unlock()
-	greenPoll(h, 1)
-	waitFor(t, "approval in flight", func() bool { return h.approveCount() == 1 })
+	greenPollUntil(t, h, 1, "approval in flight", func() bool { return h.approveCount() == 1 })
 	h.poll("Team", ghPR(2, "sha2")) // must be handled while the approval is stuck
 	waitFor(t, "PR 2 queued while approving", func() bool { return h.state(2) != "" })
 }
