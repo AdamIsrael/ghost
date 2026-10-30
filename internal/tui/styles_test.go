@@ -111,7 +111,7 @@ func TestSelectedRowKeepsBackgroundAcrossSegments(t *testing.T) {
 
 func TestDetailColors(t *testing.T) {
 	pr := prWith("ready")
-	out := tokyo.renderDetail(&pr, engine.PRState{}, 80, 20)
+	out := renderDetailNow(tokyo, &pr, engine.PRState{}, 80, 20)
 	for name, hex := range map[string]string{"title": "#7aa2f7", "additions": "#9ece6a", "deletions": "#f7768e", "author": "#7dcfff", "url": "#7b81a7"} {
 		if !strings.Contains(out, fgSGR(hex)) {
 			t.Errorf("%s not colored %s", name, hex)

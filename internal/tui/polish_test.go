@@ -56,8 +56,8 @@ func TestLongBodyShowsMoreMarker(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		body = append(body, fmt.Sprintf("line %d", i))
 	}
-	pr.Body = strings.Join(body, "\n")
-	out := ansi.Strip(testStyles.renderDetail(&pr, engine.PRState{}, 80, 20))
+	pr.Body = strings.Join(body, "\n\n")
+	out := ansi.Strip(renderDetailNow(testStyles, &pr, engine.PRState{}, 80, 20))
 	if !strings.Contains(out, "more lines (o opens the PR)") {
 		t.Errorf("clipped body needs a marker:\n%s", out)
 	}
@@ -65,7 +65,7 @@ func TestLongBodyShowsMoreMarker(t *testing.T) {
 		t.Errorf("height = %d", n)
 	}
 	pr.Body = "short"
-	if strings.Contains(ansi.Strip(testStyles.renderDetail(&pr, engine.PRState{}, 80, 20)), "more lines") {
+	if strings.Contains(ansi.Strip(renderDetailNow(testStyles, &pr, engine.PRState{}, 80, 20)), "more lines") {
 		t.Error("no marker when the body fits")
 	}
 }

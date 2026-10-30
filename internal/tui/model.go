@@ -17,6 +17,7 @@ import (
 	"github.com/AdamIsrael/ghost/internal/engine"
 	"github.com/AdamIsrael/ghost/internal/github"
 	"github.com/AdamIsrael/ghost/internal/poller"
+	"github.com/AdamIsrael/ghost/internal/prbody"
 	"github.com/AdamIsrael/ghost/internal/preflight"
 	"github.com/AdamIsrael/ghost/internal/theme"
 )
@@ -77,7 +78,25 @@ type Model struct {
 	views         []config.View // owned copy; edited with n/e/d
 	form          *viewForm
 	confirmDelete string // name of the view awaiting y/n
+
+	// PR descriptions, rendered off the UI thread (goldmark can take
+	// seconds on hostile input) and kept per body and width.
+	bodies    map[bodyKey][]prbody.Line
+	rendering map[bodyKey]bool
 }
+
+type bodyKey struct {
+	body  string
+	width int
+}
+
+type bodyMsg struct {
+	key   bodyKey
+	lines []prbody.Line
+}
+
+// maxBodies bounds the rendered-description cache; it is emptied when full.
+const maxBodies = 64
 
 type resultMsg poller.Result
 
@@ -110,7 +129,7 @@ func New(o Options) Model {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
 	m := Model{opts: o, prs: map[string][]github.PR{}, more: map[string]bool{}, errs: map[string]error{},
-		views: append([]config.View(nil), o.Views...)}
+		views: append([]config.View(nil), o.Views...), bodies: map[bodyKey][]prbody.Line{}, rendering: map[bodyKey]bool{}}
 	m.themes = o.Themes
 	if m.themes == nil {
 		m.themes, _ = theme.Load("") // built-ins are embedded and tested
@@ -211,8 +230,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg, resultMsg, changeMsg, engineDoneMsg, tea.KeyPressMsg:
 		nm.refresh()
 	}
+	if c := nm.renderBody(); c != nil {
+		cmd = tea.Batch(cmd, c)
+	}
 	return nm, cmd
 }
+
+// renderBody starts rendering the selected PR's description at the detail
+// pane's width, unless it's done or under way.
+func (m *Model) renderBody() tea.Cmd {
+	pr, w := m.selectedPR(), m.detailWidth()
+	if pr == nil || m.form != nil || w < minDetailWidth {
+		return nil
+	}
+	key := bodyKey{pr.Body, w}
+	if _, ok := m.bodies[key]; ok || m.rendering[key] {
+		return nil
+	}
+	m.rendering[key] = true
+	return func() tea.Msg { return bodyMsg{key, prbody.Render(clean(key.body), key.width)} }
+}
+
+func (m Model) detailWidth() int { return m.width - max(m.width*2/5, 20) - 1 }
 
 func (m *Model) refresh() {
 	if m.opts.Engine == nil {
@@ -263,6 +302,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForResult(m.opts.Results)
 	case changeMsg:
 		return m, waitForChange(m.opts.Engine)
+	case bodyMsg:
+		delete(m.rendering, msg.key)
+		if len(m.bodies) >= maxBodies {
+			clear(m.bodies)
+		}
+		m.bodies[msg.key] = msg.lines
 	case engineDoneMsg:
 		m.flash = msg.ok
 		if msg.err != nil {
@@ -529,14 +574,19 @@ func (m Model) render() string {
 	}
 
 	listW := max(m.width*2/5, 20)
-	detailW := m.width - listW - 1
+	detailW := m.detailWidth()
 	if detailW < minDetailWidth {
 		list := m.sty.renderList(m.currentPRs(), m.cursor, m.width, bodyH, m.emptyMessage())
 		return lipgloss.JoinVertical(lipgloss.Left, top, list, bottom)
 	}
 	list := m.sty.renderList(m.currentPRs(), m.cursor, listW, bodyH, m.emptyMessage())
 	sep := strings.TrimSuffix(strings.Repeat("│\n", bodyH), "\n")
-	detail := m.sty.renderDetail(m.selectedPR(), st, detailW, bodyH)
+	var desc []prbody.Line
+	ready := false
+	if pr := m.selectedPR(); pr != nil {
+		desc, ready = m.bodies[bodyKey{pr.Body, detailW}]
+	}
+	detail := m.sty.renderDetail(m.selectedPR(), st, desc, ready, detailW, bodyH)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, m.sty.border.Render(sep), detail)
 	return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
 }

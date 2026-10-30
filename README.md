@@ -60,6 +60,8 @@ go install github.com/AdamIsrael/ghost/cmd/ghost@latest
 
 Every step is recorded in the PR's audit trail, shown in the detail pane.
 
+The detail pane also shows the PR's description with its Markdown and HTML formatted for the terminal. Links show only their text, images and badges are left out, and each collapsible `<details>` section shows just its summary line (`▸ Release notes`). Press `o` to read the full description on GitHub.
+
 ## Safety and cost
 
 - **The agent can only read.** Reviews run with no shell and no write tools, are confined to the PR checkout, and ignore the repo's own Claude settings, hooks, plugins and `CLAUDE.md`. Ghost computes the diff itself and hands it to the agent.

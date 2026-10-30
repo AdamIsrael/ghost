@@ -11,6 +11,7 @@ import (
 	"github.com/AdamIsrael/ghost/internal/config"
 	"github.com/AdamIsrael/ghost/internal/engine"
 	"github.com/AdamIsrael/ghost/internal/github"
+	"github.com/AdamIsrael/ghost/internal/prbody"
 	"github.com/AdamIsrael/ghost/internal/preflight"
 	"github.com/AdamIsrael/ghost/internal/store"
 	"github.com/AdamIsrael/ghost/internal/textsafe"
@@ -176,7 +177,9 @@ func reviewLabel(decision string) string {
 	return strings.ToLower(strings.ReplaceAll(decision, "_", " "))
 }
 
-func (sty styles) renderDetail(pr *github.PR, rs engine.PRState, width, height int) string {
+// renderDetail draws the selected PR. desc is its rendered description;
+// ready is false while it's still being rendered.
+func (sty styles) renderDetail(pr *github.PR, rs engine.PRState, desc []prbody.Line, ready bool, width, height int) string {
 	if pr == nil {
 		return block([]string{sty.muted.Render("No pull request selected")}, width, height)
 	}
@@ -197,11 +200,15 @@ func (sty styles) renderDetail(pr *github.PR, rs engine.PRState, width, height i
 	}
 	ls = append(ls, sty.reviewLines(rs, pr.HeadSHA, width)...)
 	ls = append(ls, "", sty.heading.Render("── Description ──"))
-	body := strings.TrimSpace(clean(pr.Body))
-	if body == "" {
+	if !ready {
+		ls = append(ls, sty.muted.Render("…"))
+	} else if len(desc) == 0 {
 		ls = append(ls, sty.muted.Render("(no description)"))
 	} else {
-		lines := strings.Split(ansi.Wordwrap(body, width, " "), "\n")
+		lines := make([]string, len(desc))
+		for i, l := range desc {
+			lines[i] = sty.descLine(l)
+		}
 		if room := height - len(ls); room > 0 && len(lines) > room {
 			hidden := len(lines) - (room - 1)
 			lines = append(lines[:room-1], sty.muted.Render(fmt.Sprintf("… %d more lines (o opens the PR)", hidden)))
@@ -322,4 +329,17 @@ func (sty styles) approvalLine(r *store.Review) string {
 		return sty.err.Render("Approval result unknown; press a to check GitHub and retry")
 	}
 	return ""
+}
+
+func (sty styles) descLine(l prbody.Line) string {
+	t := cleanLine(l.Text) // the body is untrusted; entities can decode to controls
+	switch l.Kind {
+	case prbody.Heading:
+		return sty.heading.Render(t)
+	case prbody.Muted:
+		return sty.muted.Render(t)
+	case prbody.Summary:
+		return sty.info.Render(t)
+	}
+	return t
 }

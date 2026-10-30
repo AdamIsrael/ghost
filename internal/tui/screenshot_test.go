@@ -47,7 +47,7 @@ func demoModel(themeName string) tea.Model {
 	}
 	first := pr(142, "Retry webhooks with backoff", "mona", "SUCCESS", "REVIEW_REQUIRED", false, 186, 41)
 	first.HeadRef = "webhook-retries"
-	first.Body = "Failed webhook deliveries are now retried with exponential backoff (1s, 2s, 4s… up to 5 tries). Deliveries that still fail go to the dead-letter table so they can be replayed."
+	first.Body = "Failed webhook deliveries are now retried with exponential backoff (1s, 2s, 4s… up to 5 tries). Deliveries that still fail go to the **dead-letter table** so they can be replayed.\n\n<details>\n<summary>Test plan</summary>\n\n- Unit tests for the backoff schedule\n- Replayed 200 failed deliveries in staging\n</details>"
 	prs := []github.PR{
 		first,
 		pr(140, "Bump golang.org/x/net to v0.47.0", "dependabot", "PENDING", "REVIEW_REQUIRED", false, 12, 12),
@@ -87,14 +87,14 @@ func demoModel(themeName string) tea.Model {
 		Checks: []preflight.Result{{Name: "gh", OK: true}, {Name: "claude", OK: true}, {Name: "git", OK: true}},
 	}))
 	for _, msg := range []tea.Msg{
-		tea.WindowSizeMsg{Width: 136, Height: 24},
+		tea.WindowSizeMsg{Width: 136, Height: 27},
 		resultMsg(poller.Result{View: "Mine", PRs: prs[3:5], At: at(10, 4)}),
 		resultMsg(poller.Result{View: "Security", PRs: prs[4:5], At: at(10, 4)}),
 		resultMsg(poller.Result{View: "Team", PRs: prs, At: at(10, 4)}),
 	} {
 		m, _ = m.Update(msg)
 	}
-	return m
+	return settleBodies(m)
 }
 
 // withForeground puts the view's default text color into its content: a
