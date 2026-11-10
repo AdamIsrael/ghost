@@ -19,6 +19,7 @@ import (
 	"github.com/AdamIsrael/ghost/internal/poller"
 	"github.com/AdamIsrael/ghost/internal/prbody"
 	"github.com/AdamIsrael/ghost/internal/preflight"
+	"github.com/AdamIsrael/ghost/internal/store"
 	"github.com/AdamIsrael/ghost/internal/theme"
 )
 
@@ -54,6 +55,7 @@ type Engine interface {
 	TogglePause() bool
 	Changes() <-chan struct{}
 	Approve(ctx context.Context, repo string, number int) error
+	ApproveByHand(ctx context.Context, repo string, number int, headSHA string) error
 }
 
 type Model struct {
@@ -75,9 +77,10 @@ type Model struct {
 	sty       styles
 	autoTheme bool // follow the terminal background until t is pressed
 
-	views         []config.View // owned copy; edited with n/e/d
-	form          *viewForm
-	confirmDelete string // name of the view awaiting y/n
+	views          []config.View // owned copy; edited with n/e/d
+	form           *viewForm
+	confirmDelete  string     // name of the view awaiting y/n
+	confirmApprove *github.PR // PR awaiting y/n to approve by hand
 
 	// PR descriptions, rendered off the UI thread (goldmark can take
 	// seconds on hostile input) and kept per body and width.
@@ -345,6 +348,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleFormKey(msg)
 		case m.confirmDelete != "":
 			return m.handleConfirmKey(msg.String())
+		case m.confirmApprove != nil:
+			return m.handleApproveKey(msg.String())
 		}
 		return m.handleKey(msg.String())
 	}
@@ -417,8 +422,18 @@ func (m Model) handleKey(k string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		e, repo, n := m.opts.Engine, pr.Repo, pr.Number
+		if l := e.PRState(repo, n).Latest; l == nil || (l.Approval != store.ApprovalPending && l.Approval != store.ApprovalUnknown) {
+			// No review is waiting for approval: approve by hand, after a y.
+			p := *pr
+			m.confirmApprove = &p
+			return m, nil
+		}
+		ref := fmt.Sprintf("%s#%d", repo, n)
 		return m, func() tea.Msg {
-			return engineDoneMsg{what: "approve", pr: fmt.Sprintf("%s#%d", repo, n), err: e.Approve(context.Background(), repo, n)}
+			if err := e.Approve(context.Background(), repo, n); err != nil {
+				return engineDoneMsg{what: "approve", pr: ref, err: err}
+			}
+			return engineDoneMsg{what: "approve", pr: ref, ok: "approved " + ref}
 		}
 	case "t":
 		if m.opts.NoColor {
@@ -516,6 +531,9 @@ func (m Model) emptyMessage() string {
 func (m Model) statusErr() string {
 	if m.confirmDelete != "" {
 		return fmt.Sprintf("Delete view %q? y/n", m.confirmDelete)
+	}
+	if p := m.confirmApprove; p != nil {
+		return approvePrompt(*p)
 	}
 	if m.flash != "" {
 		return m.flash
@@ -631,6 +649,45 @@ func (m Model) handleFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.form = &f
 	return m, cmd
+}
+
+// approvePrompt asks to approve p by hand, naming the commit and anything
+// that would stop an automatic approval.
+func approvePrompt(p github.PR) string {
+	var warn []string
+	switch p.CIState {
+	case "FAILURE", "ERROR":
+		warn = append(warn, "CI failing")
+	case "PENDING", "EXPECTED":
+		warn = append(warn, "CI pending")
+	}
+	if p.IsDraft {
+		warn = append(warn, "draft")
+	}
+	if p.ReviewDecision == "CHANGES_REQUESTED" {
+		warn = append(warn, "changes requested")
+	}
+	q := fmt.Sprintf("Approve %s#%d at %.7s on GitHub?", p.Repo, p.Number, p.HeadSHA)
+	if len(warn) > 0 {
+		q += " (" + strings.Join(warn, ", ") + ")"
+	}
+	return q + " y/n"
+}
+
+func (m Model) handleApproveKey(k string) (tea.Model, tea.Cmd) {
+	p := *m.confirmApprove
+	m.confirmApprove = nil
+	if k != "y" || m.opts.Engine == nil {
+		return m, nil
+	}
+	e, ref := m.opts.Engine, fmt.Sprintf("%s#%d", p.Repo, p.Number)
+	m.flash = "approving " + ref + "…"
+	return m, func() tea.Msg {
+		if err := e.ApproveByHand(context.Background(), p.Repo, p.Number, p.HeadSHA); err != nil {
+			return engineDoneMsg{what: "approve", pr: ref, err: err}
+		}
+		return engineDoneMsg{what: "approve", pr: ref, ok: fmt.Sprintf("approved %s at %.7s", ref, p.HeadSHA)}
+	}
 }
 
 func (m Model) handleConfirmKey(k string) (tea.Model, tea.Cmd) {

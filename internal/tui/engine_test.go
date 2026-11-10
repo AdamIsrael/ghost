@@ -18,15 +18,17 @@ import (
 )
 
 type fakeEngine struct {
-	snap     engine.Snapshot
-	state    engine.PRState
-	polls    []poller.Result
-	rereview []github.PR
-	posted   []string
-	postErr  error
-	paused   bool
-	changes  chan struct{}
-	approved []string
+	snap      engine.Snapshot
+	state     engine.PRState
+	polls     []poller.Result
+	rereview  []github.PR
+	posted    []string
+	postErr   error
+	paused    bool
+	changes   chan struct{}
+	approved  []string
+	byHand    []string // repo#n@sha passed to ApproveByHand
+	byHandErr error
 
 	snapCalls, stateCalls int
 }
@@ -34,6 +36,11 @@ type fakeEngine struct {
 func (f *fakeEngine) Approve(_ context.Context, repo string, n int) error {
 	f.approved = append(f.approved, repo)
 	return nil
+}
+
+func (f *fakeEngine) ApproveByHand(_ context.Context, repo string, n int, sha string) error {
+	f.byHand = append(f.byHand, fmt.Sprintf("%s#%d@%s", repo, n, sha))
+	return f.byHandErr
 }
 
 func (f *fakeEngine) HandlePoll(r poller.Result)         { f.polls = append(f.polls, r) }
@@ -178,12 +185,79 @@ func TestDetailShowsPostUnknown(t *testing.T) {
 }
 
 func TestApproveKey(t *testing.T) {
+	for _, state := range []string{store.ApprovalPending, store.ApprovalUnknown} {
+		fe := &fakeEngine{state: engine.PRState{Latest: &store.Review{State: store.Posted, Approval: state}}}
+		m := withEngine(t, fe)
+		m, cmd := m.Update(key("a"))
+		m = runCmd(m, cmd)
+		if len(fe.approved) != 1 || len(fe.byHand) != 0 {
+			t.Errorf("%s: approved = %v, by hand = %v", state, fe.approved, fe.byHand)
+		}
+		if f := m.(Model).flash; f != "approved o/r#1" {
+			t.Errorf("%s: flash = %q", state, f)
+		}
+	}
+}
+
+// #22: with no approval waiting, a approves the selected PR by hand after
+// a y, whatever its review state.
+func TestApproveKeyByHand(t *testing.T) {
+	for name, latest := range map[string]*store.Review{
+		"unreviewed":   nil,
+		"not eligible": {State: store.Posted, Approval: store.ApprovalNo},
+		"ready":        {State: store.Ready},
+	} {
+		fe := &fakeEngine{state: engine.PRState{Latest: latest}}
+		m := withEngine(t, fe)
+		m, _ = m.Update(key("a"))
+		if out := screen(m); !strings.Contains(out, "Approve o/r#1 at abc1234 on GitHub? y/n") {
+			t.Errorf("%s: no prompt:\n%s", name, out)
+		}
+		if len(fe.byHand) != 0 || len(fe.approved) != 0 {
+			t.Fatalf("%s: approved before y", name)
+		}
+		m, cmd := m.Update(key("y"))
+		m = runCmd(m, cmd)
+		if len(fe.byHand) != 1 || fe.byHand[0] != "o/r#1@abc1234def" || len(fe.approved) != 0 {
+			t.Errorf("%s: by hand = %v, approved = %v", name, fe.byHand, fe.approved)
+		}
+		if f := m.(Model).flash; f != "approved o/r#1 at abc1234" {
+			t.Errorf("%s: flash = %q", name, f)
+		}
+	}
+}
+
+func TestApproveByHandCancelled(t *testing.T) {
 	fe := &fakeEngine{}
 	m := withEngine(t, fe)
-	m, cmd := m.Update(key("a"))
-	runCmd(m, cmd)
-	if len(fe.approved) != 1 {
-		t.Errorf("a: approved = %v", fe.approved)
+	m, _ = m.Update(key("a"))
+	m, cmd := m.Update(key("n"))
+	m = runCmd(m, cmd)
+	if len(fe.byHand) != 0 || strings.Contains(screen(m), "Approve o/r#1") {
+		t.Errorf("by hand = %v after n:\n%s", fe.byHand, screen(m))
+	}
+}
+
+func TestApproveByHandError(t *testing.T) {
+	fe := &fakeEngine{byHandErr: errors.New("GitHub does not allow approving your own pull request")}
+	m := withEngine(t, fe)
+	m, _ = m.Update(key("a"))
+	m, cmd := m.Update(key("y"))
+	m = runCmd(m, cmd)
+	if f := m.(Model).flash; f != "approve: GitHub does not allow approving your own pull request" {
+		t.Errorf("flash = %q", f)
+	}
+}
+
+func TestApprovePromptWarns(t *testing.T) {
+	p := samplePR(5, "x")
+	p.CIState, p.IsDraft, p.ReviewDecision = "FAILURE", true, "CHANGES_REQUESTED"
+	if got, want := approvePrompt(p), "Approve o/r#5 at abc1234 on GitHub? (CI failing, draft, changes requested) y/n"; got != want {
+		t.Errorf("prompt = %q, want %q", got, want)
+	}
+	p.CIState, p.IsDraft, p.ReviewDecision = "PENDING", false, "APPROVED"
+	if got := approvePrompt(p); !strings.Contains(got, "(CI pending)") {
+		t.Errorf("prompt = %q", got)
 	}
 }
 

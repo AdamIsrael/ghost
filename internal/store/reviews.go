@@ -229,6 +229,9 @@ func (s *Store) FailInterrupted(cap float64) ([]Review, error) {
 	if _, err := s.db.Exec(`UPDATE reviews SET approval = ? WHERE approval = ?`, ApprovalUnknown, ApprovalApproving); err != nil {
 		return nil, err
 	}
+	if _, err := s.db.Exec(`UPDATE manual_approvals SET state = ? WHERE state = ?`, ApprovalUnknown, ApprovalApproving); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -353,12 +356,15 @@ func (s *Store) SupersedeApprovals(prID, keepID int64, note string) ([]Review, e
 	return changed, nil
 }
 
-// HeadApproved reports whether another review of the same PR commit is
-// approved by Ghost, or may be (in flight or unknown).
+// HeadApproved reports whether Ghost approved the PR commit, or may have (in
+// flight or unknown): through another review than exceptID, or by hand.
 func (s *Store) HeadApproved(prID int64, headSHA string, exceptID int64) (bool, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM reviews WHERE pr_id = ? AND head_sha = ? AND id != ? AND approval IN (?, ?, ?)`,
-		prID, headSHA, exceptID, ApprovalApproved, ApprovalApproving, ApprovalUnknown).Scan(&n)
+	err := s.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM reviews WHERE pr_id = ? AND head_sha = ? AND id != ? AND approval IN (?, ?, ?)) +
+		(SELECT COUNT(*) FROM manual_approvals WHERE pr_id = ? AND head_sha = ? AND state IN (?, ?, ?))`,
+		prID, headSHA, exceptID, ApprovalApproved, ApprovalApproving, ApprovalUnknown,
+		prID, headSHA, ApprovalApproved, ApprovalApproving, ApprovalUnknown).Scan(&n)
 	return n > 0, err
 }
 

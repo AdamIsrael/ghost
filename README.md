@@ -56,7 +56,7 @@ go install github.com/AdamIsrael/ghost/cmd/ghost@latest
    If `review_label` is set, Ghost first adds that label to the PR and reviews it on the next poll; see [Review label](#review-label).
 3. A review runs Claude Code against a temporary checkout of the PR, using your agent's prompt. Ghost then checks the result for anything that looks like a secret.
 4. With `post_mode = "confirm"` (the default), the finished review waits in the detail pane until you press **`P`** to post it. With `"auto"`, it posts right away.
-5. If `[auto_approve]` is enabled and the PR meets its rules, Ghost offers an approval (press **`a`**), or approves on its own when `require_confirm = false`.
+5. If `[auto_approve]` is enabled and the PR meets its rules, Ghost offers an approval (press **`a`**), or approves on its own when `require_confirm = false`. You can also approve any PR yourself, reviewed or not: press **`a`** and confirm with `y`.
 
 Every step is recorded in the PR's audit trail, shown in the detail pane.
 
@@ -68,7 +68,7 @@ The detail pane also shows the PR's description with its Markdown and HTML forma
 - **Ghost posts, the agent doesn't.** Every review is scanned for secret-like strings (GitHub, AWS, Anthropic, Slack and Google keys, private keys) before posting. A match blocks the review permanently.
 - **Spend is capped.** A review starts only if `max_daily_cost_usd` leaves room for it at `max_cost_per_review_usd`. A review that is cut short (you quit, or it crashes) is counted at the per-review cap.
 - **Nothing posts twice.** Each posted review and approval carries a hidden marker. If GitHub's response is lost, Ghost checks for the marker before trying again.
-- **Approvals are careful.** Ghost approves only the PR's latest review, only the exact commit it reviewed, and only after rechecking the rules against GitHub right before approving. It never approves a commit twice. GitHub doesn't let you approve your own PRs, so Ghost can't either.
+- **Approvals are careful.** Ghost approves only the PR's latest review, only the exact commit it reviewed, and only after rechecking the rules against GitHub right before approving. When you approve by hand (`a`, then `y`), it approves only the commit the prompt named and stops if the PR has moved on. It never approves a commit twice. GitHub doesn't let you approve your own PRs, so Ghost can't either.
 - Only one Ghost can run against a given database at a time.
 
 ## Keys
@@ -80,7 +80,7 @@ The detail pane also shows the PR's description with its Markdown and HTML forma
 | `o` / `enter` | Open the PR in your browser |
 | `r` | Review the selected PR now, even if its CI is red or pending. Ghost confirms it's queued, and if it can't start yet (paused, daily budget reached, or `max_concurrent_reviews` busy) it says why |
 | `P` | Post the selected PR's pending review |
-| `a` | Approve the selected PR (when an approval is pending) |
+| `a` | Approve the selected PR. A pending auto-approval is approved right away; any other PR, reviewed or not, asks `Approve owner/repo#N at <commit> on GitHub? y/n` first, noting failing or pending CI, a draft, or requested changes |
 | `p` | Pause or resume starting new reviews |
 | `R` | Poll GitHub now |
 | `n` / `e` / `d` | New, edit or delete a view (`d` asks for `y` to confirm) |
@@ -103,7 +103,7 @@ Ghost reads `~/.config/ghost/config.toml` (or `$XDG_CONFIG_HOME/ghost/config.tom
 | `theme` | `"auto"` | Color theme; see [Themes](#themes) |
 | `default_agent` | `"claude"` | Agent used when a view doesn't name one |
 | `review_footer` | `""` (off) | Text added below each posted review |
-| `approval_message` | `""` (off) | Text of each approval |
+| `approval_message` | `""` (off) | Text of each approval Ghost makes after a review (approvals you make by hand with `a` have no text) |
 | `review_label` | `""` (off) | Label Ghost adds before reviewing; removing it opts a PR out |
 | `max_prs_per_view` | `50` | How many PRs each view shows (1–100) |
 | `log_file` | `~/.local/state/ghost/ghost.log` | Where Ghost logs; `""` turns logging off. See [Logs](#logs) |

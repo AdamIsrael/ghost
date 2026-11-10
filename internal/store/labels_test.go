@@ -73,7 +73,7 @@ func TestMigrationFromVersion3KeepsData(t *testing.T) {
 		t.Fatal(err)
 	}
 	pr, _ := s.UpsertPR(github.PR{Repo: "o/r", Number: 9, HeadSHA: "a"})
-	if _, err := s.db.Exec(`DROP TABLE pr_labels; PRAGMA user_version = 3`); err != nil {
+	if _, err := s.db.Exec(`DROP TABLE pr_labels; DROP TABLE manual_approvals; PRAGMA user_version = 3`); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -82,8 +82,8 @@ func TestMigrationFromVersion3KeepsData(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if v, _ := s.SchemaVersion(); v != 4 {
-		t.Errorf("version = %d, want 4", v)
+	if v, _ := s.SchemaVersion(); v != len(migrations) {
+		t.Errorf("version = %d, want %d", v, len(migrations))
 	}
 	if err := s.MarkLabeled(pr, "ai-review"); err != nil {
 		t.Fatalf("pr_labels missing after migration: %v", err)

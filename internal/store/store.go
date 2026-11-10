@@ -73,6 +73,14 @@ var migrations = []string{
 		opted_out_at TEXT,
 		PRIMARY KEY (pr_id, label)
 	);`,
+	`CREATE TABLE manual_approvals (
+		pr_id      INTEGER NOT NULL REFERENCES prs(id),
+		head_sha   TEXT    NOT NULL,
+		state      TEXT    NOT NULL,
+		note       TEXT    NOT NULL DEFAULT '',
+		updated_at TEXT    NOT NULL,
+		PRIMARY KEY (pr_id, head_sha)
+	);`,
 }
 
 // ErrLocked means another Ghost has the database open.

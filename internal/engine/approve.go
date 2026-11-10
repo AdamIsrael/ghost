@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/github"
@@ -241,5 +242,93 @@ func (e *Engine) approve(ctx context.Context, r *store.Review) error {
 		return err
 	}
 	e.setApproval(r, store.ApprovalApproving, store.ApprovalApproved, "APPROVE posted")
+	return nil
+}
+
+func manualApprovalMarker(headSHA string) string {
+	return fmt.Sprintf("<!-- ghost-manual-approval:%s -->", headSHA)
+}
+
+// ApproveByHand approves a PR's commit headSHA because the operator asked,
+// with or without a review behind it, so the auto-approve rules don't apply.
+// It approves only that commit (the one the operator saw), never one Ghost
+// already approved, and checks GitHub before retrying an approval whose
+// result is unknown. The approval carries only a hidden marker:
+// approval_message describes a review's outcome, and there may be none.
+func (e *Engine) ApproveByHand(ctx context.Context, repo string, number int, headSHA string) error {
+	ctx, done, err := e.op(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
+	d, err := e.d.GetPR(ctx, repo, number)
+	if err != nil {
+		return fmt.Errorf("could not read the PR: %w", err)
+	}
+	if d.State != "" && d.State != "OPEN" {
+		return fmt.Errorf("the PR is %s", strings.ToLower(d.State))
+	}
+	if d.HeadSHA != headSHA {
+		return fmt.Errorf("the PR has new commits (now at %.7s); press a again to approve them", d.HeadSHA)
+	}
+	prID, err := e.d.Store.UpsertPR(d.PR)
+	if err != nil {
+		return err
+	}
+	from, err := e.d.Store.ManualApproval(prID, headSHA)
+	if err != nil {
+		return err
+	}
+	switch from {
+	case store.ApprovalApproved:
+		return errors.New("you already approved this commit")
+	case store.ApprovalApproving:
+		return errors.New("this PR is already being approved")
+	case store.ApprovalUnknown:
+		if e.d.HasReview == nil {
+			return errors.New("an earlier approval may have reached GitHub and Ghost cannot check, so it is not retried")
+		}
+	default:
+		if done, err := e.d.Store.HeadApproved(prID, headSHA, 0); err != nil {
+			return err
+		} else if done {
+			return errors.New("this commit is already approved by Ghost")
+		}
+	}
+	ok, err := e.d.Store.ClaimManualApproval(prID, headSHA, from)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("this PR is already being approved")
+	}
+	e.notify()
+	short := fmt.Sprintf("%.7s", headSHA)
+	marker := manualApprovalMarker(headSHA)
+	settle := func(state, kind, note string) {
+		_ = e.d.Store.SetManualApproval(prID, headSHA, state, note)
+		e.audit(prID, 0, kind, note)
+	}
+
+	if from == store.ApprovalUnknown {
+		found, err := e.d.HasReview(ctx, repo, number, marker)
+		if err != nil {
+			_ = e.d.Store.SetManualApproval(prID, headSHA, store.ApprovalUnknown, "could not check GitHub: "+err.Error())
+			return fmt.Errorf("could not check GitHub for the earlier approval: %w", err)
+		}
+		if found {
+			settle(store.ApprovalApproved, "approved", "by you at "+short+" (found on GitHub from the earlier attempt; not approved again)")
+			return nil
+		}
+	}
+	if err := e.d.Approve(ctx, repo, number, headSHA, marker); err != nil {
+		if github.IsClientError(err) {
+			settle(store.ApprovalFailed, "approval failed", err.Error())
+		} else {
+			settle(store.ApprovalUnknown, "approval failed", err.Error()+"; it may have reached GitHub, so a checks before approving again")
+		}
+		return err
+	}
+	settle(store.ApprovalApproved, "approved", "by you at "+short)
 	return nil
 }
