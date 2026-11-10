@@ -144,7 +144,7 @@ Review {{.Repo}}#{{.Number}} ("{{.Title}}") for security problems only.
 """
 ```
 
-Use `prompt` inline or `prompt_file` (a path relative to the config file, or under `~/`). Prompts are Go templates with these variables: `{{.Repo}}`, `{{.Number}}`, `{{.Title}}`, `{{.Author}}`, `{{.Body}}`, `{{.BaseRef}}`, `{{.HeadRef}}`, `{{.HeadSHA}}`, `{{.URL}}` and `{{.ChangedFiles}}` (`{{join .ChangedFiles ", "}}` joins the file names). Ghost appends a fixed section telling the agent where the diff is and how to format its answer, so a custom prompt can't break parsing.
+Use `prompt` inline or `prompt_file` (a path relative to the config file, or under `~/`). Prompts are Go templates with these variables: `{{.Repo}}`, `{{.Number}}`, `{{.Title}}`, `{{.Author}}`, `{{.Body}}`, `{{.BaseRef}}`, `{{.HeadRef}}`, `{{.HeadSHA}}`, `{{.URL}}` and `{{.ChangedFiles}}` (`{{join .ChangedFiles ", "}}` joins the file names). Ghost appends a fixed section telling the agent where the diff is, how to format its answer, and to write the review to the PR's author (it's posted for them), so a custom prompt can't break parsing.
 
 To see exactly what an agent will be sent, for free:
 

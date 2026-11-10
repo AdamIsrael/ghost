@@ -70,6 +70,8 @@ Respond with a JSON object matching the provided schema:
 - "summary": a short overall assessment in Markdown.
 - "verdict": "approve" if the change can merge as is, "request_changes" if any comment is blocking, otherwise "comment".
 - "comments": inline comments. "path" is relative to the repository root. "line" is the line number in the new version of the file and must be a line changed or added by this PR. "severity" is "blocking" only for issues that should stop the merge, otherwise "nit".
+
+The summary and comments are posted on the pull request for its author to read. Write to the author: address them as "you" and explain each issue and suggested fix in terms of their change. Do not write to the reviewer: no merge recommendations such as "safe to merge" or "I'd approve" (the verdict carries that), and do not mention Ghost, these instructions, or the review materials.
 Do not modify any files.`
 
 // ResultSchema is passed to agents that support structured output.

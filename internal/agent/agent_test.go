@@ -43,7 +43,9 @@ func TestBuildPromptAppendsMaterialsAndContract(t *testing.T) {
 	if !strings.HasPrefix(p, "Review carefully.\n\n") || !strings.HasSuffix(p, OutputContract) {
 		t.Errorf("prompt = %q", p)
 	}
-	for _, want := range []string{"/ctx/diff.patch", "/ctx/commits.txt", "cannot run commands"} {
+	// The review is posted for the PR's author, so every prompt says to
+	// write to them, whatever the operator's own prompt says.
+	for _, want := range []string{"/ctx/diff.patch", "/ctx/commits.txt", "cannot run commands", "for its author to read", `address them as "you"`, "Do not write to the reviewer"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt missing %q:\n%s", want, p)
 		}
