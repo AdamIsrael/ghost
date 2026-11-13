@@ -292,15 +292,15 @@ func (sty styles) reviewLines(st engine.PRState, prHead string, width int) []str
 		ls = append(ls, "", sty.heading.Render("── Reviewing… ──"))
 	case store.Ready:
 		ls = append(ls, "", sty.special.Bold(true).Render(fmt.Sprintf("── Pending review: %s, $%.2f (press P to post) ──", cleanLine(r.Verdict), r.CostUSD)))
-		ls = append(ls, strings.Split(ansi.Wordwrap(clean(r.Summary), width, " "), "\n")...)
+		ls = append(ls, strings.Split(ansi.Wrap(clean(r.Summary), max(width, 1), " "), "\n")...)
 		for _, c := range st.Comments {
-			ls = append(ls, fmt.Sprintf("%s:%d [%s] %s", cleanLine(c.Path), c.Line, cleanLine(c.Severity), cleanLine(c.Body)))
+			ls = append(ls, wrapIndented(fmt.Sprintf("%s:%d [%s] %s", cleanLine(c.Path), c.Line, cleanLine(c.Severity), strings.TrimSpace(clean(c.Body))), width)...)
 		}
 	case store.Posting:
 		ls = append(ls, "", sty.heading.Render("── Posting… ──"))
 	case store.PostUnknown:
 		ls = append(ls, "", sty.err.Render("── Post result unknown; press P to check GitHub and retry ──"))
-		ls = append(ls, strings.Split(ansi.Wordwrap(clean(r.Summary), width, " "), "\n")...)
+		ls = append(ls, strings.Split(ansi.Wrap(clean(r.Summary), max(width, 1), " "), "\n")...)
 	case store.Blocked:
 		ls = append(ls, "", sty.err.Render("── Review blocked; it will not be posted ──"), cleanLine(r.Error))
 	}
@@ -308,6 +308,23 @@ func (sty styles) reviewLines(st engine.PRState, prHead string, width int) []str
 		ls = append(ls, "", line)
 	}
 	return ls
+}
+
+// wrapIndented wraps s, which may hold newlines, to width and indents every
+// line after the first, so a long item reads as one block.
+func wrapIndented(s string, width int) []string {
+	const indent = "  "
+	room := max(width-len(indent), 10)
+	var out []string
+	for _, para := range strings.Split(s, "\n") {
+		for _, l := range strings.Split(ansi.Wrap(para, room, " "), "\n") {
+			if len(out) > 0 {
+				l = strings.TrimRight(indent+l, " ")
+			}
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 func (sty styles) approvalLine(r *store.Review) string {

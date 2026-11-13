@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AdamIsrael/ghost/internal/agent"
 	"github.com/AdamIsrael/ghost/internal/engine"
@@ -354,6 +355,40 @@ func TestDetailShowsQueuedAndRunning(t *testing.T) {
 	} {
 		if out := screen(withEngine(t, &fakeEngine{state: tc.state})); !strings.Contains(out, tc.want) {
 			t.Errorf("missing %q:\n%s", tc.want, out)
+		}
+	}
+}
+
+// #25: a long comment wraps under its path instead of being cut at the
+// pane's edge.
+func TestPendingReviewCommentsWrap(t *testing.T) {
+	body := "When `myFlag` is false, `c.post` is never fetched, so the record reads the PR from the cache, which can be stale after a force push; fetch it here as well. LASTWORD"
+	fe := &fakeEngine{state: engine.PRState{
+		Latest:   &store.Review{State: store.Ready, Verdict: "comment", Summary: "One point."},
+		Comments: []agent.InlineComment{{Path: "internal/code/code.go", Line: 62, Body: body, Severity: "nit"}},
+	}}
+	out := screen(withEngine(t, fe))
+	if !strings.Contains(out, "LASTWORD") {
+		t.Fatalf("comment cut:\n%s", out)
+	}
+	start := strings.Index(out, "internal/code/code.go:62 [nit] When")
+	if start < 0 {
+		t.Fatalf("comment missing:\n%s", out)
+	}
+	if strings.Contains(out[start:strings.Index(out, "LASTWORD")], "…") {
+		t.Errorf("comment truncated:\n%s", out)
+	}
+}
+
+func TestWrapIndented(t *testing.T) {
+	got := wrapIndented("a.go:1 [nit] one two three four\n\nsecond paragraph", 20)
+	want := []string{"a.go:1 [nit] one", "  two three four", "", "  second paragraph"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	for _, l := range wrapIndented("x "+strings.Repeat("y", 50), 20) {
+		if ansi.StringWidth(l) > 20 {
+			t.Errorf("line %q is wider than 20", l)
 		}
 	}
 }
