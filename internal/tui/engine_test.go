@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -390,5 +392,40 @@ func TestWrapIndented(t *testing.T) {
 		if ansi.StringWidth(l) > 20 {
 			t.Errorf("line %q is wider than 20", l)
 		}
+	}
+}
+
+// #27: a long audit message (a failed review's error) wraps, up to
+// maxEventLines lines per event, and the trail says where the full text is.
+func TestAuditTrailWrapsAndPointsToLog(t *testing.T) {
+	at := time.Date(2026, 11, 17, 12, 1, 0, 0, time.Local)
+	failed := "claude: unreadable output, cost unknown (counted as $1.50) (exit status 1): unexpected end of JSON input: Claude Code could not reach the API; check your network connection and try again. TAILWORD (spent $1.50)"
+	huge := strings.Repeat("stderr line\n", 40) + "NEVERSHOWN"
+	fe := &fakeEngine{changes: make(chan struct{}, 1), state: engine.PRState{Audit: []store.AuditEvent{
+		{At: at, Kind: "failed", Message: failed},
+		{At: at, Kind: "failed", Message: huge},
+		{At: at, Kind: "queued", Message: "AFTERHUGE"},
+	}}}
+	home, _ := os.UserHomeDir()
+	m := send(t, New(Options{Views: twoViews, MaxDailyCostUSD: 10, Engine: fe, LogPath: filepath.Join(home, ".local/state/ghost/ghost.log")}),
+		tea.WindowSizeMsg{Width: 160, Height: 50}, result("Team", samplePR(1, "First")))
+	out := screen(m)
+	for _, want := range []string{"Audit trail ──  full text in ~/.local/state/ghost/ghost.log", "12:01 failed — claude: unreadable output", "TAILWORD", "… (cut)", "AFTERHUGE"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "NEVERSHOWN") {
+		t.Errorf("a long event was not cut:\n%s", out)
+	}
+	if n := strings.Count(out, "stderr line"); n != maxEventLines-1 {
+		t.Errorf("long event shows %d lines, want %d:\n%s", n, maxEventLines-1, out)
+	}
+
+	// No log: no pointer.
+	m = send(t, New(Options{Views: twoViews, MaxDailyCostUSD: 10, Engine: fe}),
+		tea.WindowSizeMsg{Width: 160, Height: 50}, result("Team", samplePR(1, "First")))
+	if out := screen(m); strings.Contains(out, "full text in") {
+		t.Errorf("pointer shown with no log:\n%s", out)
 	}
 }

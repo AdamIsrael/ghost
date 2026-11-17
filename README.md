@@ -259,7 +259,7 @@ A file named after a built-in replaces it. `ghost --check` warns if your selecte
 
 ## Logs
 
-The TUI has to cut long messages to fit. Ghost also writes every error in full, plus what it did (queued, posted, approved, labeled…), to `~/.local/state/ghost/ghost.log` (or `$XDG_STATE_HOME/ghost/ghost.log`):
+The audit trail wraps each message, but cuts one longer than six lines, and its heading shows where the log is. Ghost writes every error in full, plus what it did (queued, posted, approved, labeled…), to `~/.local/state/ghost/ghost.log` (or `$XDG_STATE_HOME/ghost/ghost.log`):
 
 ```
 time=2026-10-26T11:41:02.318-04:00 level=ERROR msg="poll failed" view=Team query="is:open is:pr org:acme" err="search: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)"

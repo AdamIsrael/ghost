@@ -153,5 +153,5 @@ func renderDetailNow(sty styles, pr *github.PR, rs engine.PRState, width, height
 	if pr != nil {
 		desc = prbody.Render(clean(pr.Body), width)
 	}
-	return sty.renderDetail(pr, rs, desc, true, width, height)
+	return sty.renderDetail(pr, rs, desc, true, "", width, height)
 }

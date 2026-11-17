@@ -135,7 +135,7 @@ func TestApprovalAndReviewLineColors(t *testing.T) {
 			t.Errorf("%s approval line not %s: %q", state, hex, line)
 		}
 	}
-	ls := tokyo.reviewLines(engine.PRState{Latest: &store.Review{State: store.Ready, HeadSHA: "abc", Verdict: "approve"}}, "abc", 80)
+	ls := tokyo.reviewLines(engine.PRState{Latest: &store.Review{State: store.Ready, HeadSHA: "abc", Verdict: "approve"}}, "abc", "", 80)
 	if !strings.Contains(strings.Join(ls, "\n"), fgSGR("#bb9af7")) {
 		t.Error("pending review heading should be special")
 	}

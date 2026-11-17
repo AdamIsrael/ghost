@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -178,8 +180,9 @@ func reviewLabel(decision string) string {
 }
 
 // renderDetail draws the selected PR. desc is its rendered description;
-// ready is false while it's still being rendered.
-func (sty styles) renderDetail(pr *github.PR, rs engine.PRState, desc []prbody.Line, ready bool, width, height int) string {
+// ready is false while it's still being rendered. logPath is where the full
+// audit messages are logged ("" = nowhere).
+func (sty styles) renderDetail(pr *github.PR, rs engine.PRState, desc []prbody.Line, ready bool, logPath string, width, height int) string {
 	if pr == nil {
 		return block([]string{sty.muted.Render("No pull request selected")}, width, height)
 	}
@@ -198,7 +201,7 @@ func (sty styles) renderDetail(pr *github.PR, rs engine.PRState, desc []prbody.L
 		sty.muted.Render(cleanLine(pr.URL)),
 		"",
 	}
-	ls = append(ls, sty.reviewLines(rs, pr.HeadSHA, width)...)
+	ls = append(ls, sty.reviewLines(rs, pr.HeadSHA, logPath, width)...)
 	ls = append(ls, "", sty.heading.Render("── Description ──"))
 	if !ready {
 		ls = append(ls, sty.muted.Render("…"))
@@ -264,13 +267,26 @@ func (sty styles) renderStatusBar(si statusInfo, width int) string {
 	return fit(line, width)
 }
 
-func (sty styles) reviewLines(st engine.PRState, prHead string, width int) []string {
-	ls := []string{sty.heading.Render("── Audit trail ──")}
+// maxEventLines caps how many lines one audit event takes once wrapped, so
+// a long error (e.g. an agent's stderr) can't push the rest off the pane;
+// the log has it in full.
+const maxEventLines = 6
+
+func (sty styles) reviewLines(st engine.PRState, prHead, logPath string, width int) []string {
+	head := sty.heading.Render("── Audit trail ──")
+	if logPath != "" {
+		head += sty.muted.Render("  full text in " + cleanLine(homeRel(logPath)))
+	}
+	ls := []string{head}
 	if len(st.Audit) == 0 {
 		ls = append(ls, sty.muted.Render("No activity yet."))
 	}
 	for _, ev := range st.Audit {
-		ls = append(ls, fmt.Sprintf("%s %s — %s", sty.muted.Render(ev.At.Local().Format("15:04")), cleanLine(ev.Kind), cleanLine(ev.Message)))
+		ev := wrapIndented(fmt.Sprintf("%s %s — %s", sty.muted.Render(ev.At.Local().Format("15:04")), cleanLine(ev.Kind), strings.TrimSpace(clean(ev.Message))), width)
+		if len(ev) > maxEventLines {
+			ev = append(ev[:maxEventLines-1], sty.muted.Render("  … (cut)"))
+		}
+		ls = append(ls, ev...)
 	}
 	r := st.Latest
 	if r == nil {
@@ -308,6 +324,16 @@ func (sty styles) reviewLines(st engine.PRState, prHead string, width int) []str
 		ls = append(ls, "", line)
 	}
 	return ls
+}
+
+// homeRel shows a path under the home directory as ~/….
+func homeRel(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if rel, ok := strings.CutPrefix(p, home+string(filepath.Separator)); ok {
+			return "~/" + rel
+		}
+	}
+	return p
 }
 
 // wrapIndented wraps s, which may hold newlines, to width and indents every

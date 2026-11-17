@@ -267,6 +267,7 @@ func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *
 		// A log is for debugging; don't refuse to start without one.
 		fmt.Fprintf(stderr, "ghost: can't write the log %s: %v; continuing without it\n", logPath, err)
 		logger, logFile, _ = logging.Open("")
+		logPath = ""
 	}
 	defer logFile.Close()
 	logger.Info("started", "version", versionString(), "config", cfgPath, "db", dbPath, "log", logPath)
@@ -283,6 +284,7 @@ func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *
 		Themes:          themes,
 		ReviewLabel:     cfg.ReviewLabel,
 		Log:             logger,
+		LogPath:         logPath,
 		MaxPRsPerView:   cfg.MaxPRsPerView,
 	}
 	views := cfg.Views

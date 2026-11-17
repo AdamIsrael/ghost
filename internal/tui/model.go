@@ -41,6 +41,7 @@ type Options struct {
 	ReviewLabel     string                    // review_label: the view form's default
 	MaxPRsPerView   int                       // max_prs_per_view: the view form's default
 	Log             *slog.Logger              // receives errors in full; nil = discard
+	LogPath         string                    // where Log writes, shown in the audit trail; "" = no log
 	ActiveView      string                    // view to start on (e.g. ghost review's one-off tab)
 	Flash           string                    // message to show at startup
 }
@@ -604,7 +605,7 @@ func (m Model) render() string {
 	if pr := m.selectedPR(); pr != nil {
 		desc, ready = m.bodies[bodyKey{pr.Body, detailW}]
 	}
-	detail := m.sty.renderDetail(m.selectedPR(), st, desc, ready, detailW, bodyH)
+	detail := m.sty.renderDetail(m.selectedPR(), st, desc, ready, m.opts.LogPath, detailW, bodyH)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, m.sty.border.Render(sep), detail)
 	return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
 }
