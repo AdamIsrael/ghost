@@ -48,11 +48,13 @@ func demoModel(themeName string) tea.Model {
 	first := pr(142, "Retry webhooks with backoff", "mona", "SUCCESS", "REVIEW_REQUIRED", false, 186, 41)
 	first.HeadRef = "webhook-retries"
 	first.Body = "Failed webhook deliveries are now retried with exponential backoff (1s, 2s, 4s… up to 5 tries). Deliveries that still fail go to the **dead-letter table** so they can be replayed.\n\n<details>\n<summary>Test plan</summary>\n\n- Unit tests for the backoff schedule\n- Replayed 200 failed deliveries in staging\n</details>"
+	cached := pr(137, "Cache org settings per request", "octocat", "SUCCESS", "APPROVED", false, 64, 9)
+	cached.MyReviewState, cached.MyReviewSHA = "APPROVED", "4b7d0e2c91" // new commits since
 	prs := []github.PR{
 		first,
 		pr(140, "Bump golang.org/x/net to v0.47.0", "dependabot", "PENDING", "REVIEW_REQUIRED", false, 12, 12),
 		pr(139, "Paginate the audit log endpoint", "hubot", "FAILURE", "REVIEW_REQUIRED", false, 240, 38),
-		pr(137, "Cache org settings per request", "octocat", "SUCCESS", "APPROVED", false, 64, 9),
+		cached,
 		pr(135, "Rate-limit login attempts", "mona", "SUCCESS", "CHANGES_REQUESTED", false, 118, 7),
 		pr(131, "WIP: new billing export", "octocat", "PENDING", "", true, 512, 80),
 	}

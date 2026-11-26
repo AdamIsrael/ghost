@@ -64,8 +64,9 @@ func TestSearchPRsParsesFields(t *testing.T) {
 		Author: "octocat", Body: "Retries transient errors.", BaseRef: "main", HeadRef: "retries",
 		HeadSHA: "abc1234def5678", ReviewDecision: "REVIEW_REQUIRED", CIState: "PENDING", State: "OPEN",
 		Additions: 120, Deletions: 30, ChangedFiles: 4,
-		UpdatedAt: time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC),
-		Labels:    []string{"ai-review", "bug"},
+		UpdatedAt:     time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC),
+		Labels:        []string{"ai-review", "bug"},
+		MyReviewState: "APPROVED", MyReviewSHA: "0ld0000c0mm1t",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("PR 0 =\n%+v\nwant\n%+v", got, want)
@@ -215,6 +216,55 @@ func TestQueriesRequestLabels(t *testing.T) {
 	for name, q := range map[string]string{"search": searchQuery, "pr": prQuery} {
 		if !strings.Contains(q, "labels(first: 50) { nodes { name } }") {
 			t.Errorf("%s query does not fetch labels", name)
+		}
+	}
+}
+
+// #30: your latest review's commit, so the TUI can show new commits since.
+func TestMyReview(t *testing.T) {
+	node := func(state string, oid *string) prNode {
+		var n prNode
+		n.HeadRefOid = "head"
+		if state != "" {
+			n.MyReview = &struct {
+				State  string `json:"state"`
+				Commit *struct {
+					Oid string `json:"oid"`
+				} `json:"commit"`
+			}{State: state}
+			if oid != nil {
+				n.MyReview.Commit = &struct {
+					Oid string `json:"oid"`
+				}{Oid: *oid}
+			}
+		}
+		return n
+	}
+	head, old := "head", "old"
+	for _, c := range []struct {
+		name  string
+		n     prNode
+		state string
+		newer bool
+	}{
+		{"never reviewed", node("", nil), "", false},
+		{"reviewed the head", node("APPROVED", &head), "APPROVED", false},
+		{"commented on an older commit", node("COMMENTED", &old), "COMMENTED", true},
+		{"changes requested, then force-pushed away", node("CHANGES_REQUESTED", nil), "CHANGES_REQUESTED", true},
+		{"dismissed review doesn't count", node("DISMISSED", &old), "", false},
+		{"unsubmitted draft doesn't count", node("PENDING", &old), "", false},
+	} {
+		pr := toPR(c.n)
+		if pr.MyReviewState != c.state || pr.NewSinceMyReview() != c.newer {
+			t.Errorf("%s: state %q, new %v; want %q, %v", c.name, pr.MyReviewState, pr.NewSinceMyReview(), c.state, c.newer)
+		}
+	}
+}
+
+func TestQueriesAskForMyReview(t *testing.T) {
+	for name, q := range map[string]string{"search": searchQuery, "pr": prQuery} {
+		if !strings.Contains(q, "viewerLatestReview { state commit { oid } }") {
+			t.Errorf("%s query doesn't fetch viewerLatestReview", name)
 		}
 	}
 }

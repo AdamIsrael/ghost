@@ -155,3 +155,37 @@ func renderDetailNow(sty styles, pr *github.PR, rs engine.PRState, width, height
 	}
 	return sty.renderDetail(pr, rs, desc, true, "", width, height)
 }
+
+// #30: new commits since your review mark the row (+, bold status) and
+// add a line to the detail pane.
+func TestNewCommitsSinceMyReview(t *testing.T) {
+	pr := samplePR(1, "T") // head abc1234def
+	plain := ansi.Strip(tokyo.renderRow(pr, 80, false))
+	if !strings.HasPrefix(plain, " ● Ready") {
+		t.Errorf("never-reviewed row = %q", plain)
+	}
+	pr.MyReviewState, pr.MyReviewSHA = "APPROVED", pr.HeadSHA
+	if got := ansi.Strip(tokyo.renderRow(pr, 80, false)); got != plain || sinceMyReview(pr) != "" {
+		t.Errorf("reviewed-at-head row = %q, detail %q", got, sinceMyReview(pr))
+	}
+
+	pr.MyReviewSHA = "9f3c2a1b7e"
+	row := tokyo.renderRow(pr, 80, false)
+	if got := ansi.Strip(row); !strings.HasPrefix(got, "+● Ready") {
+		t.Errorf("row = %q", got)
+	}
+	if !strings.HasPrefix(row, "\x1b[1;") || strings.HasPrefix(tokyo.renderRow(samplePR(1, "T"), 80, false), "\x1b[1;") {
+		t.Errorf("only the marked row's status should be bold: %q", row)
+	}
+	for _, c := range []struct{ state, sha, want string }{
+		{"APPROVED", "9f3c2a1b7e", "+ New commits since your approval (approved 9f3c2a1, now at abc1234)"},
+		{"COMMENTED", "9f3c2a1b7e", "+ New commits since your review (reviewed 9f3c2a1, now at abc1234)"},
+		{"CHANGES_REQUESTED", "", "+ New commits since your review (reviewed an earlier commit, now at abc1234)"},
+	} {
+		pr.MyReviewState, pr.MyReviewSHA = c.state, c.sha
+		out := renderDetailNow(tokyo, &pr, engine.PRState{}, 100, 30)
+		if !strings.Contains(ansi.Strip(out), c.want) {
+			t.Errorf("%s: detail missing %q:\n%s", c.state, c.want, ansi.Strip(out))
+		}
+	}
+}

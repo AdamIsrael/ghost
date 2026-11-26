@@ -17,6 +17,7 @@
         "headRefName": "retries",
         "headRefOid": "abc1234def5678",
         "reviewDecision": "REVIEW_REQUIRED",
+        "viewerLatestReview": {"state": "APPROVED", "commit": {"oid": "0ld0000c0mm1t"}},
         "author": {"login": "octocat"},
         "repository": {"nameWithOwner": "o/r"},
         "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "PENDING"}}}]},

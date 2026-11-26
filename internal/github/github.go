@@ -41,6 +41,19 @@ type PR struct {
 	ChangedFiles   int
 	UpdatedAt      time.Time
 	Labels         []string
+
+	// Your latest submitted review of the PR (by the token's account, so
+	// including reviews Ghost posted for you): its state (APPROVED,
+	// CHANGES_REQUESTED or COMMENTED; "" = none) and the commit it was on
+	// ("" if GitHub no longer knows it).
+	MyReviewState string
+	MyReviewSHA   string
+}
+
+// NewSinceMyReview reports whether the PR's head moved (new commits or a
+// force-push) since your latest review.
+func (p PR) NewSinceMyReview() bool {
+	return p.MyReviewState != "" && p.HeadSHA != "" && p.MyReviewSHA != p.HeadSHA
 }
 
 func (p PR) Status() status.Status { return status.Derive(p.IsDraft, p.ReviewDecision, p.CIState) }
@@ -93,6 +106,7 @@ const searchQuery = `query($q: String!, $first: Int!) {
       ... on PullRequest {
         number state title url body isDraft updatedAt additions deletions changedFiles
         baseRefName headRefName headRefOid reviewDecision
+        viewerLatestReview { state commit { oid } }
         author { login }
         repository { nameWithOwner }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
@@ -124,7 +138,13 @@ type prNode struct {
 	HeadRefName    string    `json:"headRefName"`
 	HeadRefOid     string    `json:"headRefOid"`
 	ReviewDecision string    `json:"reviewDecision"`
-	Author         *struct {
+	MyReview       *struct {
+		State  string `json:"state"`
+		Commit *struct {
+			Oid string `json:"oid"`
+		} `json:"commit"`
+	} `json:"viewerLatestReview"`
+	Author *struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	Repository struct {
@@ -227,6 +247,15 @@ func toPR(n prNode) PR {
 	if n.Author != nil {
 		pr.Author = n.Author.Login
 	}
+	if r := n.MyReview; r != nil {
+		switch r.State {
+		case "APPROVED", "CHANGES_REQUESTED", "COMMENTED": // not PENDING or DISMISSED
+			pr.MyReviewState = r.State
+			if r.Commit != nil {
+				pr.MyReviewSHA = r.Commit.Oid
+			}
+		}
+	}
 	if len(n.Commits.Nodes) > 0 && n.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
 		pr.CIState = n.Commits.Nodes[0].Commit.StatusCheckRollup.State
 	}
@@ -247,6 +276,7 @@ const prQuery = `query($owner: String!, $name: String!, $number: Int!) {
     pullRequest(number: $number) {
       number state title url body isDraft updatedAt additions deletions changedFiles
       baseRefName headRefName headRefOid reviewDecision
+      viewerLatestReview { state commit { oid } }
       author { login }
       repository { nameWithOwner }
       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }

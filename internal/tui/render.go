@@ -109,8 +109,13 @@ func sum(xs []int) int {
 
 func (sty styles) renderRow(pr github.PR, width int, sel bool) string {
 	st := pr.Status()
-	head := fmt.Sprintf("%s %-17s", st.Icon(), st)
+	// A leading + (and bold status) marks new commits since your review.
+	mark := " "
 	headStyle, restStyle := sty.status(st), lipgloss.NewStyle()
+	if pr.NewSinceMyReview() {
+		mark, headStyle = "+", headStyle.Bold(true)
+	}
+	head := fmt.Sprintf("%s%s %-17s", mark, st.Icon(), st)
 	if sel {
 		// Status colors aren't contrast-checked against the selection color,
 		// so the selected row's status uses the foreground (bold) instead.
@@ -199,8 +204,11 @@ func (sty styles) renderDetail(pr *github.PR, rs engine.PRState, desc []prbody.L
 			sty.ciStyled(pr.CIState), cleanLine(reviewLabel(pr.ReviewDecision))),
 		fmt.Sprintf("%s → %s  (%s)", cleanLine(pr.HeadRef), cleanLine(pr.BaseRef), sha),
 		sty.muted.Render(cleanLine(pr.URL)),
-		"",
 	}
+	if line := sinceMyReview(*pr); line != "" {
+		ls = append(ls, sty.warning.Bold(true).Render(line))
+	}
+	ls = append(ls, "")
 	ls = append(ls, sty.reviewLines(rs, pr.HeadSHA, logPath, width)...)
 	ls = append(ls, "", sty.heading.Render("── Description ──"))
 	if !ready {
@@ -324,6 +332,22 @@ func (sty styles) reviewLines(st engine.PRState, prHead, logPath string, width i
 		ls = append(ls, "", line)
 	}
 	return ls
+}
+
+// sinceMyReview describes new commits since your latest review, or "".
+func sinceMyReview(pr github.PR) string {
+	if !pr.NewSinceMyReview() {
+		return ""
+	}
+	what, did := "review", "reviewed"
+	if pr.MyReviewState == "APPROVED" {
+		what, did = "approval", "approved"
+	}
+	was := "an earlier commit"
+	if pr.MyReviewSHA != "" {
+		was = fmt.Sprintf("%.7s", cleanLine(pr.MyReviewSHA))
+	}
+	return fmt.Sprintf("+ New commits since your %s (%s %s, now at %.7s)", what, did, was, cleanLine(pr.HeadSHA))
 }
 
 // homeRel shows a path under the home directory as ~/….
