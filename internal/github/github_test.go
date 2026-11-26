@@ -67,6 +67,8 @@ func TestSearchPRsParsesFields(t *testing.T) {
 		UpdatedAt:     time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC),
 		Labels:        []string{"ai-review", "bug"},
 		MyReviewState: "APPROVED", MyReviewSHA: "0ld0000c0mm1t",
+		MyReviewAt:    time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC),
+		ForcePushedAt: time.Date(2026, 10, 9, 9, 30, 0, 0, time.UTC),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("PR 0 =\n%+v\nwant\n%+v", got, want)
@@ -226,12 +228,7 @@ func TestMyReview(t *testing.T) {
 		var n prNode
 		n.HeadRefOid = "head"
 		if state != "" {
-			n.MyReview = &struct {
-				State  string `json:"state"`
-				Commit *struct {
-					Oid string `json:"oid"`
-				} `json:"commit"`
-			}{State: state}
+			n.MyReview = &myReviewNode{State: state}
 			if oid != nil {
 				n.MyReview.Commit = &struct {
 					Oid string `json:"oid"`
@@ -263,8 +260,32 @@ func TestMyReview(t *testing.T) {
 
 func TestQueriesAskForMyReview(t *testing.T) {
 	for name, q := range map[string]string{"search": searchQuery, "pr": prQuery} {
-		if !strings.Contains(q, "viewerLatestReview { state commit { oid } }") {
+		if !strings.Contains(q, "viewerLatestReview { state submittedAt commit { oid } }") {
 			t.Errorf("%s query doesn't fetch viewerLatestReview", name)
 		}
+		if !strings.Contains(q, "timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: 1)") {
+			t.Errorf("%s query doesn't fetch the latest force-push", name)
+		}
+	}
+}
+
+// #31: a force-push after your review is told apart from new commits.
+func TestForcePushedSinceMyReview(t *testing.T) {
+	reviewed := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	pr := PR{HeadSHA: "new", MyReviewState: "APPROVED", MyReviewSHA: "old", MyReviewAt: reviewed}
+	if pr.ForcePushedSinceMyReview() {
+		t.Error("no force-push, but reported one")
+	}
+	pr.ForcePushedAt = reviewed.Add(-time.Hour)
+	if pr.ForcePushedSinceMyReview() {
+		t.Error("force-push before the review counted")
+	}
+	pr.ForcePushedAt = reviewed.Add(time.Hour)
+	if !pr.ForcePushedSinceMyReview() {
+		t.Error("force-push after the review not reported")
+	}
+	pr.HeadSHA = "old" // pushed back to the commit you reviewed
+	if pr.ForcePushedSinceMyReview() || pr.NewSinceMyReview() {
+		t.Error("force-push back to the reviewed commit reported")
 	}
 }

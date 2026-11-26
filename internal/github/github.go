@@ -48,12 +48,20 @@ type PR struct {
 	// ("" if GitHub no longer knows it).
 	MyReviewState string
 	MyReviewSHA   string
+	MyReviewAt    time.Time // when you submitted it
+	ForcePushedAt time.Time // the PR's latest force-push; zero = none
 }
 
 // NewSinceMyReview reports whether the PR's head moved (new commits or a
 // force-push) since your latest review.
 func (p PR) NewSinceMyReview() bool {
 	return p.MyReviewState != "" && p.HeadSHA != "" && p.MyReviewSHA != p.HeadSHA
+}
+
+// ForcePushedSinceMyReview reports whether the head moved because of a
+// force-push after your latest review (rather than only new commits).
+func (p PR) ForcePushedSinceMyReview() bool {
+	return p.NewSinceMyReview() && !p.ForcePushedAt.IsZero() && p.ForcePushedAt.After(p.MyReviewAt)
 }
 
 func (p PR) Status() status.Status { return status.Derive(p.IsDraft, p.ReviewDecision, p.CIState) }
@@ -106,7 +114,8 @@ const searchQuery = `query($q: String!, $first: Int!) {
       ... on PullRequest {
         number state title url body isDraft updatedAt additions deletions changedFiles
         baseRefName headRefName headRefOid reviewDecision
-        viewerLatestReview { state commit { oid } }
+        viewerLatestReview { state submittedAt commit { oid } }
+        timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: 1) { nodes { ... on HeadRefForcePushedEvent { createdAt } } }
         author { login }
         repository { nameWithOwner }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
@@ -124,26 +133,26 @@ type searchResponse struct {
 }
 
 type prNode struct {
-	Number         int       `json:"number"`
-	State          string    `json:"state"`
-	Title          string    `json:"title"`
-	URL            string    `json:"url"`
-	Body           string    `json:"body"`
-	IsDraft        bool      `json:"isDraft"`
-	UpdatedAt      time.Time `json:"updatedAt"`
-	Additions      int       `json:"additions"`
-	Deletions      int       `json:"deletions"`
-	ChangedFiles   int       `json:"changedFiles"`
-	BaseRefName    string    `json:"baseRefName"`
-	HeadRefName    string    `json:"headRefName"`
-	HeadRefOid     string    `json:"headRefOid"`
-	ReviewDecision string    `json:"reviewDecision"`
-	MyReview       *struct {
-		State  string `json:"state"`
-		Commit *struct {
-			Oid string `json:"oid"`
-		} `json:"commit"`
-	} `json:"viewerLatestReview"`
+	Number         int           `json:"number"`
+	State          string        `json:"state"`
+	Title          string        `json:"title"`
+	URL            string        `json:"url"`
+	Body           string        `json:"body"`
+	IsDraft        bool          `json:"isDraft"`
+	UpdatedAt      time.Time     `json:"updatedAt"`
+	Additions      int           `json:"additions"`
+	Deletions      int           `json:"deletions"`
+	ChangedFiles   int           `json:"changedFiles"`
+	BaseRefName    string        `json:"baseRefName"`
+	HeadRefName    string        `json:"headRefName"`
+	HeadRefOid     string        `json:"headRefOid"`
+	ReviewDecision string        `json:"reviewDecision"`
+	MyReview       *myReviewNode `json:"viewerLatestReview"`
+	ForcePushes    struct {
+		Nodes []struct {
+			CreatedAt time.Time `json:"createdAt"`
+		} `json:"nodes"`
+	} `json:"timelineItems"`
 	Author *struct {
 		Login string `json:"login"`
 	} `json:"author"`
@@ -164,6 +173,14 @@ type prNode struct {
 			Name string `json:"name"`
 		} `json:"nodes"`
 	} `json:"labels"`
+}
+
+type myReviewNode struct {
+	State       string    `json:"state"`
+	SubmittedAt time.Time `json:"submittedAt"`
+	Commit      *struct {
+		Oid string `json:"oid"`
+	} `json:"commit"`
 }
 
 // PartialError reports PRs a search matched but GitHub would not return, for
@@ -250,7 +267,7 @@ func toPR(n prNode) PR {
 	if r := n.MyReview; r != nil {
 		switch r.State {
 		case "APPROVED", "CHANGES_REQUESTED", "COMMENTED": // not PENDING or DISMISSED
-			pr.MyReviewState = r.State
+			pr.MyReviewState, pr.MyReviewAt = r.State, r.SubmittedAt
 			if r.Commit != nil {
 				pr.MyReviewSHA = r.Commit.Oid
 			}
@@ -258,6 +275,9 @@ func toPR(n prNode) PR {
 	}
 	if len(n.Commits.Nodes) > 0 && n.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
 		pr.CIState = n.Commits.Nodes[0].Commit.StatusCheckRollup.State
+	}
+	if fp := n.ForcePushes.Nodes; len(fp) > 0 {
+		pr.ForcePushedAt = fp[len(fp)-1].CreatedAt
 	}
 	for _, l := range n.Labels.Nodes {
 		pr.Labels = append(pr.Labels, l.Name)
@@ -276,7 +296,8 @@ const prQuery = `query($owner: String!, $name: String!, $number: Int!) {
     pullRequest(number: $number) {
       number state title url body isDraft updatedAt additions deletions changedFiles
       baseRefName headRefName headRefOid reviewDecision
-      viewerLatestReview { state commit { oid } }
+      viewerLatestReview { state submittedAt commit { oid } }
+      timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: 1) { nodes { ... on HeadRefForcePushedEvent { createdAt } } }
       author { login }
       repository { nameWithOwner }
       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }

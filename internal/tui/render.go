@@ -347,7 +347,11 @@ func sinceMyReview(pr github.PR) string {
 	if pr.MyReviewSHA != "" {
 		was = fmt.Sprintf("%.7s", cleanLine(pr.MyReviewSHA))
 	}
-	return fmt.Sprintf("+ New commits since your %s (%s %s, now at %.7s)", what, did, was, cleanLine(pr.HeadSHA))
+	change := "New commits"
+	if pr.ForcePushedSinceMyReview() {
+		change = "Force-pushed"
+	}
+	return fmt.Sprintf("+ %s since your %s (%s %s, now at %.7s)", change, what, did, was, cleanLine(pr.HeadSHA))
 }
 
 // homeRel shows a path under the home directory as ~/….

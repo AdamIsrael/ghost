@@ -181,7 +181,14 @@ func TestNewCommitsSinceMyReview(t *testing.T) {
 		{"APPROVED", "9f3c2a1b7e", "+ New commits since your approval (approved 9f3c2a1, now at abc1234)"},
 		{"COMMENTED", "9f3c2a1b7e", "+ New commits since your review (reviewed 9f3c2a1, now at abc1234)"},
 		{"CHANGES_REQUESTED", "", "+ New commits since your review (reviewed an earlier commit, now at abc1234)"},
+		{"FORCE", "9f3c2a1b7e", "+ Force-pushed since your approval (approved 9f3c2a1, now at abc1234)"},
 	} {
+		pr.MyReviewAt, pr.ForcePushedAt = time.Time{}, time.Time{}
+		if c.state == "FORCE" {
+			c.state = "APPROVED"
+			pr.MyReviewAt = time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+			pr.ForcePushedAt = pr.MyReviewAt.Add(time.Hour)
+		}
 		pr.MyReviewState, pr.MyReviewSHA = c.state, c.sha
 		out := renderDetailNow(tokyo, &pr, engine.PRState{}, 100, 30)
 		if !strings.Contains(ansi.Strip(out), c.want) {
