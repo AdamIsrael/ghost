@@ -309,10 +309,22 @@ func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// The poller exists before the engine so the engine can ask it to
+	// refresh after posting; it starts running further down.
+	var p *poller.Poller
+	searcher, searchErr := d.newSearcher()
+	if searchErr == nil {
+		// Created even with no views: views can be added from the TUI.
+		p = poller.New(searcher, views, cfg.PollInterval.Duration, cfg.PRLimitFor)
+	}
+	var refresh func()
+	if p != nil {
+		refresh = p.PollNow
+	}
 	eng := engine.New(cfg, engine.Deps{
 		Store: st, GetPR: d.getPR, Checkout: d.checkout, NewReviewer: d.newReviewer,
 		PostReview: d.postReview, HasReview: d.hasReview, Approve: d.approve, Log: logger,
-		AddLabel: d.addLabel,
+		AddLabel: d.addLabel, Refresh: refresh,
 	})
 	eng.SetViews(views)
 	engineDone := make(chan struct{})
@@ -333,12 +345,9 @@ func startGhost(cfgPath, dbPath string, stdout, stderr io.Writer, d deps, once *
 			opts.Flash = "review not started: " + err.Error()
 		}
 	}
-	var p *poller.Poller
-	if s, err := d.newSearcher(); err != nil {
-		opts.PollDisabled = "GitHub unavailable: " + err.Error()
+	if p == nil {
+		opts.PollDisabled = "GitHub unavailable: " + searchErr.Error()
 	} else {
-		// Started even with no views: views can be added from the TUI.
-		p = poller.New(s, views, cfg.PollInterval.Duration, cfg.PRLimitFor)
 		go p.Run(ctx)
 		opts.Results, opts.PollNow = p.Results(), p.PollNow
 	}

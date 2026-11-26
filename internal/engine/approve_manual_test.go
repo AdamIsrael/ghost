@@ -161,3 +161,46 @@ func TestApproveByHandAfterAutoApproval(t *testing.T) {
 		t.Fatalf("err %v approvals %d", err, h.approveCount())
 	}
 }
+
+func (h *harness) refreshCount() int { h.mu.Lock(); defer h.mu.Unlock(); return h.refreshes }
+
+// #32: posting a review or an approval refreshes the PR lists at once.
+func TestPostAndApproveRefreshLists(t *testing.T) {
+	h := approvingHarness(t, nil)
+	h.heads[1] = "sha1"
+	h.postedReview(t) // posts
+	if n := h.refreshCount(); n != 1 {
+		t.Fatalf("after posting: %d refreshes, want 1", n)
+	}
+	if err := h.e.Approve(context.Background(), "o/r", 1); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.refreshCount(); n != 2 {
+		t.Fatalf("after approving: %d refreshes, want 2", n)
+	}
+	// Nothing to post: no refresh.
+	h.e.PostPending(context.Background(), "o/r", 1)
+	if n := h.refreshCount(); n != 2 {
+		t.Errorf("after a refused post: %d refreshes, want 2", n)
+	}
+}
+
+func TestApproveByHandRefreshesOnlyOnSuccess(t *testing.T) {
+	h := manualHarness(t)
+	h.approveFn = func() error {
+		return &api.HTTPError{StatusCode: 422, Message: "Can not approve your own pull request"}
+	}
+	h.e.ApproveByHand(context.Background(), "o/r", 7, "sha7")
+	if n := h.refreshCount(); n != 0 {
+		t.Fatalf("after a refused approval: %d refreshes, want 0", n)
+	}
+	h.mu.Lock()
+	h.approveFn = nil
+	h.mu.Unlock()
+	if err := h.e.ApproveByHand(context.Background(), "o/r", 7, "sha7"); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.refreshCount(); n != 1 {
+		t.Errorf("after approving: %d refreshes, want 1", n)
+	}
+}

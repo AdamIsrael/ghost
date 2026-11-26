@@ -60,6 +60,8 @@ go install github.com/AdamIsrael/ghost/cmd/ghost@latest
 
 Every step is recorded in the PR's audit trail, shown in the detail pane.
 
+After Ghost posts a review or an approval, it fetches the lists again right away, so the PR's status updates without waiting for the next poll.
+
 A **`+`** before a PR's status, which is then bold, means the PR has new commits, or was force-pushed, since your latest review or approval. That covers reviews Ghost posted for you and ones you left on GitHub. The detail pane names the commit you reviewed and the current one, and says "Force-pushed" instead of "New commits" when the PR was force-pushed after your review. Views with `auto_review = true` review the new commit on their own; elsewhere, press `r`.
 
 The detail pane also shows the PR's description with its Markdown and HTML formatted for the terminal. Links show only their text, images and badges are left out, and each collapsible `<details>` section shows just its summary line (`▸ Release notes`). Press `o` to read the full description on GitHub.

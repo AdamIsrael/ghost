@@ -78,6 +78,7 @@ type harness struct {
 	diffPath      string        // where the last checkout wrote it
 	hasRevCalls   int
 	log           *lockedBuffer // what the engine logged
+	refreshes     int           // Refresh calls
 }
 
 func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
@@ -168,6 +169,11 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 			defer h.mu.Unlock()
 			h.hasRevCalls++
 			return h.onGH, h.hasRevErr
+		},
+		Refresh: func() {
+			h.mu.Lock()
+			h.refreshes++
+			h.mu.Unlock()
 		},
 		Now: func() time.Time {
 			h.mu.Lock()

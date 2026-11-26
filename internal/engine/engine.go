@@ -34,6 +34,10 @@ type Deps struct {
 	AddLabel    func(ctx context.Context, repo string, number int, label string) error
 	Now         func() time.Time
 	Log         *slog.Logger // receives every audit event; nil = discard
+	// Refresh asks for the PR lists to be fetched again now; it must not
+	// block. Called after Ghost posts a review or an approval, so the lists
+	// show the PR's new state without waiting for the next poll. nil = off.
+	Refresh func()
 }
 
 type Snapshot struct {
@@ -440,6 +444,9 @@ func (e *Engine) audit(prID, reviewID int64, kind, msg string) {
 	_ = e.d.Store.AddAudit(prID, reviewID, kind, msg)
 	e.logAudit(prID, reviewID, kind, msg)
 	e.notify()
+	if (kind == "posted" || kind == "approved") && e.d.Refresh != nil {
+		e.d.Refresh() // the PR changed on GitHub
+	}
 }
 
 // logAudit mirrors an audit event to the log file in full, with the PR it's
